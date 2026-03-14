@@ -1,6 +1,6 @@
 # 01 — Piano di Scaffolding: estensione `xiaozhi`
 
-_Data: 2026-03-14_
+_Data: 2026-03-14 — Aggiornato: 2026-03-14_
 
 ## Obiettivo
 
@@ -17,22 +17,33 @@ ESP32 (XiaoZhi firmware)
 Il firmware parla protocollo XiaoZhi (7 messaggi JSON + audio Opus binario).
 Il bridge traduce: Opus → Whisper STT → agente → TTS → Opus → device.
 
-## Stato file (aggiornato 2026-03-14)
+## Stato file (aggiornato 2026-03-14 task 1.2/1.3/1.4)
 
 ```
 extensions/xiaozhi/
 ├── openclaw.plugin.json      # manifest plugin ✅
 ├── package.json              # dipendenze estensione ✅
-├── index.ts                  # entry point — channel + tools + lifecycle ✅
+├── index.ts                  # entry point — channel + tools + lifecycle + WS handler ✅
 └── src/
-    ├── bridge.ts             # WebSocket bridge (stub — Phase 2) ✅
-    ├── protocol.ts           # parser protocollo XiaoZhi (stub — Phase 2) ✅
+    ├── bridge.ts             # WebSocket bridge COMPLETO ✅ (1.4)
+    ├── protocol.ts           # parser + buildHello/Stt/Llm/Tts ✅ (1.3)
     ├── audio-pipeline.ts     # Opus ↔ PCM, VAD, Whisper STT, TTS (stub — Phase 2) ✅
     ├── channel.ts            # ChannelPlugin "xiaozhi" completo ✅
     ├── config.ts             # configurazione estensione ✅
     ├── ota.ts                # endpoint OTA HTTP (stub 501) ✅
     ├── tools.ts              # 5 tool MCP stub (Phase 2 li implementa) ✅
     └── types.ts              # tipi TypeScript condivisi ✅
+```
+
+### File core modificati (task 1.2)
+
+```
+src/plugins/types.ts              # OpenClawPluginWsUpgradeHandler + registerWsUpgradeHandler ✅
+src/plugins/registry.ts           # PluginWsUpgradeRegistration + wsUpgradeHandlers[] ✅
+src/gateway/server/plugins-ws.ts  # createGatewayPluginWsUpgradeHandler (NUOVO) ✅
+src/gateway/server-http.ts        # attachGatewayUpgradeHandler: pluginUpgradeHandler param ✅
+src/gateway/server-runtime-state.ts  # crea handler + lo passa all'upgrade handler ✅
+src/plugin-sdk/index.ts           # export OpenClawPluginWsUpgradeHandler ✅
 ```
 
 ### Tool MCP registrati (stub)
@@ -60,19 +71,26 @@ Studiato `extensions/voice-call/` (Twilio) come riferimento:
 - gestione sessione audio bidirezionale
 - integrazione con l'agent loop
 
-## Unica modifica prevista al core
+## Modifica al core (completata 2026-03-14)
 
-`src/gateway/server-http.ts` → aggiungere path `/xiaozhi/v1/` nell'upgrade handler WS.
-Richiede: `registerWsUpgradeRoute` nel plugin registry + plugin-SDK + `plugins-http.ts`.
+Implementato pattern `registerWsUpgradeHandler` end-to-end:
+
+- `OpenClawPluginWsUpgradeHandler` nel tipo + `PluginRegistry.wsUpgradeHandlers[]`
+- `createGatewayPluginWsUpgradeHandler` factory (analogo a `plugins-http.ts`)
+- `attachGatewayUpgradeHandler` accetta `pluginUpgradeHandler?` opzionale
+- `server-runtime-state.ts` crea e passa il handler composito
+- `plugin-sdk/index.ts` esporta il tipo per le estensioni
 
 ## Step successivi
 
 1. ~~Completare `src/channel.ts`~~ ✅
 2. ~~Completare `src/tools.ts`~~ ✅
 3. ~~Collegare `index.ts` al channel e ai tools~~ ✅
-4. **Patch WS upgrade handler** — `src/gateway/server-http.ts` + plugin-SDK (prossimo)
-5. Test locale con ESP32 fisico
-6. Documentazione in `docs/channels/xiaozhi.md`
+4. ~~**Patch WS upgrade handler** — plugin SDK + registry + server-http + bridge WS~~ ✅ (1.2+1.3+1.4)
+5. **SSL/TLS su `openclaw.lara-ai.eu`** — prerequisito P1 per ESP32 (4G)
+6. Test locale con wscat: `wscat -c ws://127.0.0.1:18789/xiaozhi/v1/ -H "Device-Id: test-001"`
+7. Test con ESP32 fisico
+8. Fase 2: audio pipeline (Opus, VAD, Whisper, TTS)
 
 ## Dipendenze da aggiungere
 

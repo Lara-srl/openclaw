@@ -50,6 +50,11 @@ const xiaozhiPlugin = {
     // Channel plugin registration
     api.registerChannel({ plugin: xiaozhiChannelPlugin });
 
+    // WebSocket upgrade handler — routes /xiaozhi/v1/* to the bridge
+    api.registerWsUpgradeHandler((req, socket, head) => {
+      return runtime?.bridge.handleUpgrade(req, socket, head) ?? false;
+    });
+
     // MCP tools (stubs — Phase 2 wires real bridge calls)
     registerLaragociTools(api, () => runtime?.bridge ?? null);
 

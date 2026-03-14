@@ -20,6 +20,7 @@ import type {
   OpenClawPluginHttpHandler,
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginHookOptions,
+  OpenClawPluginWsUpgradeHandler,
   ProviderPlugin,
   OpenClawPluginService,
   OpenClawPluginToolContext,
@@ -94,6 +95,11 @@ export type PluginCommandRegistration = {
   source: string;
 };
 
+export type PluginWsUpgradeRegistration = {
+  pluginId?: string;
+  handler: OpenClawPluginWsUpgradeHandler;
+};
+
 export type PluginRecord = {
   id: string;
   name: string;
@@ -134,6 +140,7 @@ export type PluginRegistry = {
   cliRegistrars: PluginCliRegistration[];
   services: PluginServiceRegistration[];
   commands: PluginCommandRegistration[];
+  wsUpgradeHandlers: PluginWsUpgradeRegistration[];
   diagnostics: PluginDiagnostic[];
 };
 
@@ -157,6 +164,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     cliRegistrars: [],
     services: [],
     commands: [],
+    wsUpgradeHandlers: [],
     diagnostics: [],
   };
 }
@@ -414,6 +422,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerWsUpgradeHandler = (
+    record: PluginRecord,
+    handler: OpenClawPluginWsUpgradeHandler,
+  ) => {
+    registry.wsUpgradeHandlers.push({ pluginId: record.id, handler });
+  };
+
   const registerCommand = (record: PluginRecord, command: OpenClawPluginCommandDefinition) => {
     const name = command.name.trim();
     if (!name) {
@@ -497,6 +512,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       registerService: (service) => registerService(record, service),
       registerCommand: (command) => registerCommand(record, command),
+      registerWsUpgradeHandler: (handler) => registerWsUpgradeHandler(record, handler),
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) => registerTypedHook(record, hookName, handler, opts),
     };

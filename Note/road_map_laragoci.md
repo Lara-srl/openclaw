@@ -1,7 +1,7 @@
 # Roadmap LaraGoci — Task per Claude
 
 > Roadmap sintetica e operativa. Per dettagli tecnici, protocollo e architettura vedi [laragoci.md](laragoci.md)
-> **Data:** 2026-02-19 — **Ultimo aggiornamento:** 2026-03-14
+> **Data:** 2026-02-19 — **Ultimo aggiornamento:** 2026-03-14 (task 1.2+1.3+1.4 completati)
 
 ---
 
@@ -29,15 +29,15 @@
 
 ## Fase 1: Estensione OpenClaw (core bridge)
 
-| #    | Task                         | Dipende da | File/Posizione               | Dettaglio                                                                                                                                    |
-| ---- | ---------------------------- | ---------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1.1  | ~~**Scaffold estensione**~~  | P2         | `extensions/xiaozhi/`        | **COMPLETATO** ✅ — `openclaw.plugin.json`, `package.json`, `index.ts`, tutti i file `src/`. Commit `c3cf410`.                               |
-| 1.1b | ~~**Channel plugin**~~       | 1.1        | `src/channel.ts`             | **COMPLETATO** ✅ — `xiaozhiChannelPlugin` con config, status, capabilities. Commit `1fbefcc`.                                               |
-| 1.1c | ~~**Tool MCP (stub)**~~      | 1.1        | `src/tools.ts`               | **COMPLETATO** ✅ — 5 tool stub: `laragoci_speak/emoji/volume/status/play`. `index.ts` cablato. Commit `29d575a`.                            |
-| 1.2  | **Patch WS upgrade handler** | P2         | `src/gateway/server-http.ts` | In `attachGatewayUpgradeHandler()`: se path `/xiaozhi/v1/` → passa al bridge. Richiede `registerWsUpgradeRoute` nel plugin-SDK. **PROSSIMO** |
-| 1.3  | **Protocollo XiaoZhi**       | 1.1        | `src/protocol.ts`            | Parser messaggi JSON (hello, listen, stt, tts, llm, abort, mcp) + frame binari Opus (versione 1 e 3).                                        |
-| 1.4  | **Bridge WebSocket**         | 1.2, 1.3   | `src/bridge.ts`              | Gestione connessioni device, handshake hello, session management, stato device (idle/listening/speaking).                                    |
-| 1.5  | **Endpoint OTA**             | 1.1        | `src/ota.ts`                 | `registerHttpRoute("/xiaozhi/ota/")`. Risponde con URL WSS + token HMAC-SHA256.                                                              |
+| #    | Task                             | Dipende da | File/Posizione                                | Dettaglio                                                                                                                                      |
+| ---- | -------------------------------- | ---------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.1  | ~~**Scaffold estensione**~~      | P2         | `extensions/xiaozhi/`                         | **COMPLETATO** ✅ — `openclaw.plugin.json`, `package.json`, `index.ts`, tutti i file `src/`. Commit `c3cf410`.                                 |
+| 1.1b | ~~**Channel plugin**~~           | 1.1        | `src/channel.ts`                              | **COMPLETATO** ✅ — `xiaozhiChannelPlugin` con config, status, capabilities. Commit `1fbefcc`.                                                 |
+| 1.1c | ~~**Tool MCP (stub)**~~          | 1.1        | `src/tools.ts`                                | **COMPLETATO** ✅ — 5 tool stub: `laragoci_speak/emoji/volume/status/play`. `index.ts` cablato. Commit `29d575a`.                              |
+| 1.2  | ~~**Patch WS upgrade handler**~~ | P2         | `src/gateway/server-http.ts` + `src/plugins/` | **COMPLETATO** ✅ — `registerWsUpgradeHandler` nel plugin-SDK + registry + factory `plugins-ws.ts` + `attachGatewayUpgradeHandler` aggiornato. |
+| 1.3  | ~~**Protocollo XiaoZhi**~~       | 1.1        | `src/protocol.ts`                             | **COMPLETATO** ✅ — `parseMessage`, `buildHello`, `buildStt`, `buildLlm`, `buildTts`.                                                          |
+| 1.4  | ~~**Bridge WebSocket**~~         | 1.2, 1.3   | `src/bridge.ts`                               | **COMPLETATO** ✅ — `WebSocketServer noServer`, `handleUpgrade` (path `/xiaozhi/v1`), session tracking UUID, hello handshake, close/error.     |
+| 1.5  | **Endpoint OTA**                 | 1.1        | `src/ota.ts`                                  | `registerHttpRoute("/xiaozhi/ota/")`. Risponde con URL WSS + token HMAC-SHA256.                                                                |
 
 ## Fase 2: Audio pipeline
 
@@ -129,8 +129,13 @@ CREARE:
   extensions/xiaozhi/src/ota.ts
   extensions/xiaozhi/src/tools.ts
 
-MODIFICARE (1 solo file):
-  src/gateway/server-http.ts  → attachGatewayUpgradeHandler() aggiungere path /xiaozhi/v1/
+MODIFICATI (task 1.2):
+  src/plugins/types.ts              ✅ OpenClawPluginWsUpgradeHandler + registerWsUpgradeHandler
+  src/plugins/registry.ts           ✅ PluginWsUpgradeRegistration + wsUpgradeHandlers[]
+  src/gateway/server/plugins-ws.ts  ✅ NUOVO — createGatewayPluginWsUpgradeHandler
+  src/gateway/server-http.ts        ✅ attachGatewayUpgradeHandler: pluginUpgradeHandler param
+  src/gateway/server-runtime-state.ts ✅ crea handler + passa ad attachGatewayUpgradeHandler
+  src/plugin-sdk/index.ts           ✅ export OpenClawPluginWsUpgradeHandler
 
 RIFERIMENTO (non modificare, solo studiare):
   extensions/voice-call/      → modello architetturale da seguire

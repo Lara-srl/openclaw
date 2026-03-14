@@ -4,7 +4,7 @@ _Data: 2026-03-14_
 
 ## Prerequisiti prima di toccare il device
 
-- [ ] Completare task 1.2 + 1.3 + 1.4 nel codice (bridge WS funzionante)
+- [x] Completare task 1.2 + 1.3 + 1.4 nel codice (bridge WS funzionante) ✅ 2026-03-14
 - [ ] SSL/TLS su `openclaw.lara-ai.eu` (P1) — senza certificato valido l'ESP32 rifiuta WSS
 
 ---

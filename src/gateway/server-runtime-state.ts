@@ -28,6 +28,7 @@ import type { DedupeEntry } from "./server-shared.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
+import { createGatewayPluginWsUpgradeHandler } from "./server/plugins-ws.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -116,6 +117,11 @@ export async function createGatewayRuntimeState(params: {
     log: params.logPlugins,
   });
 
+  const handlePluginWsUpgrade = createGatewayPluginWsUpgradeHandler({
+    registry: params.pluginRegistry,
+    log: params.logPlugins,
+  });
+
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);
   if (!isLoopbackHost(params.bindHost)) {
     params.log.warn(
@@ -176,6 +182,7 @@ export async function createGatewayRuntimeState(params: {
       clients,
       resolvedAuth: params.resolvedAuth,
       rateLimiter: params.rateLimiter,
+      pluginUpgradeHandler: handlePluginWsUpgrade ?? undefined,
     });
   }
 

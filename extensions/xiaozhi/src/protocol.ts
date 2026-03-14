@@ -12,8 +12,22 @@ export function parseMessage(data: string | Buffer): XiaozhuMessage {
 
 /**
  * Build the initial hello frame sent to a connecting device.
- * TODO: fill in protocol fields (Phase 2).
  */
 export function buildHello(sessionId: string): string {
   return JSON.stringify({ type: "hello", sessionId });
+}
+
+/** Build a speech-to-text result frame. */
+export function buildStt(text: string): string {
+  return JSON.stringify({ type: "stt", text });
+}
+
+/** Build an LLM response frame. */
+export function buildLlm(text: string, emotion = "neutral"): string {
+  return JSON.stringify({ type: "llm", text, emotion });
+}
+
+/** Build a TTS control frame (start / sentence_start / stop). */
+export function buildTts(action: "start" | "sentence_start" | "stop", text?: string): string {
+  return JSON.stringify({ type: "tts", action, ...(text ? { text } : {}) });
 }

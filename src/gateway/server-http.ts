@@ -637,6 +637,12 @@ export function attachGatewayUpgradeHandler(opts: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /** Optional plugin-registered WS upgrade handler; runs before the main wss fallback. */
+  pluginUpgradeHandler?: (
+    req: IncomingMessage,
+    socket: import("node:stream").Duplex,
+    head: Buffer,
+  ) => boolean;
 }) {
   const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
@@ -675,6 +681,9 @@ export function attachGatewayUpgradeHandler(opts: {
         if (canvasHost.handleUpgrade(req, socket, head)) {
           return;
         }
+      }
+      if (opts.pluginUpgradeHandler?.(req, socket, head)) {
+        return;
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);

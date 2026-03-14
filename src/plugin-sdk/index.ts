@@ -99,6 +99,7 @@ export type {
   OpenClawPluginApi,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
+  OpenClawPluginWsUpgradeHandler,
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthResult,

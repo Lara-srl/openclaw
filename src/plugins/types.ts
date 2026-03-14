@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Command } from "commander";
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
@@ -200,6 +201,13 @@ export type OpenClawPluginHttpRouteHandler = (
   res: ServerResponse,
 ) => Promise<void> | void;
 
+/** Returns true if the upgrade was handled, false to fall through. */
+export type OpenClawPluginWsUpgradeHandler = (
+  req: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+) => boolean;
+
 export type OpenClawPluginCliContext = {
   program: Command;
   config: OpenClawConfig;
@@ -274,6 +282,7 @@ export type OpenClawPluginApi = {
    * Use this for simple state-toggling or status commands that don't need AI reasoning.
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
+  registerWsUpgradeHandler: (handler: OpenClawPluginWsUpgradeHandler) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(

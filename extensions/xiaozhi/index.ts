@@ -1,7 +1,9 @@
 import type { GatewayRequestHandlerOptions, OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { XiaozhiBridge } from "./src/bridge.js";
+import { setActiveBridge, xiaozhiChannelPlugin } from "./src/channel.js";
 import { parseXiaozhuConfig, type XiaozhuConfig } from "./src/config.js";
 import { handleOtaRequest } from "./src/ota.js";
+import { registerLaragociTools } from "./src/tools.js";
 import type { XiaozhuRuntime } from "./src/types.js";
 
 const xiaozhiConfigSchema = {
@@ -45,6 +47,12 @@ const xiaozhiPlugin = {
       return runtime;
     };
 
+    // Channel plugin registration
+    api.registerChannel({ plugin: xiaozhiChannelPlugin });
+
+    // MCP tools (stubs — Phase 2 wires real bridge calls)
+    registerLaragociTools(api, () => runtime?.bridge ?? null);
+
     // OTA endpoint — stub (501 Not Implemented)
     api.registerHttpRoute({
       path: config.otaPath,
@@ -79,7 +87,8 @@ const xiaozhiPlugin = {
           return;
         }
         try {
-          await ensureRuntime();
+          const rt = await ensureRuntime();
+          setActiveBridge(rt.bridge);
         } catch (err) {
           api.logger.error(
             `[xiaozhi] Failed to start runtime: ${
@@ -89,6 +98,7 @@ const xiaozhiPlugin = {
         }
       },
       stop: async () => {
+        setActiveBridge(null);
         if (!runtimePromise) {
           return;
         }

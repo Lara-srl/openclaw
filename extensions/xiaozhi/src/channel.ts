@@ -1,7 +1,7 @@
-import { Type } from "@sinclair/typebox";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk";
 import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk";
 import type { XiaozhiBridge } from "./bridge.js";
-import { parseXiaozhuConfig } from "./config.js";
+import { parseXiaozhuConfig, XiaozhuConfigSchema } from "./config.js";
 
 // ─── Account shape ────────────────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ export const xiaozhiChannelPlugin: ChannelPlugin<ResolvedXiaozhuAccount> = {
 
   capabilities: {
     // Voice-only device — single DM conversation, no group/thread/media support.
-    chatTypes: ["dm"],
+    chatTypes: ["direct"],
     media: false,
     reactions: false,
     edit: false,
@@ -96,14 +96,7 @@ export const xiaozhiChannelPlugin: ChannelPlugin<ResolvedXiaozhuAccount> = {
     },
   },
 
-  configSchema: {
-    jsonSchema: Type.Object({
-      enabled: Type.Optional(Type.Boolean()),
-      secret: Type.Optional(Type.String()),
-      wsPath: Type.Optional(Type.String()),
-      otaPath: Type.Optional(Type.String()),
-    }),
-  },
+  configSchema: buildChannelConfigSchema(XiaozhuConfigSchema),
 
   status: {
     buildChannelSummary({ account }) {

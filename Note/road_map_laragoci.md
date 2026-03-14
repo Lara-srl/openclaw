@@ -1,7 +1,7 @@
 # Roadmap LaraGoci — Task per Claude
 
 > Roadmap sintetica e operativa. Per dettagli tecnici, protocollo e architettura vedi [laragoci.md](laragoci.md)
-> **Data:** 2026-02-19
+> **Data:** 2026-02-19 — **Ultimo aggiornamento:** 2026-03-14
 
 ---
 
@@ -29,13 +29,15 @@
 
 ## Fase 1: Estensione OpenClaw (core bridge)
 
-| #   | Task                         | Dipende da | File/Posizione               | Dettaglio                                                                                                 |
-| --- | ---------------------------- | ---------- | ---------------------------- | --------------------------------------------------------------------------------------------------------- |
-| 1.1 | **Scaffold estensione**      | P2         | `extensions/xiaozhi/`        | Creare `openclaw.plugin.json`, `package.json`, `index.ts`. Dipendenza: `@discordjs/opus`.                 |
-| 1.2 | **Patch WS upgrade handler** | P2         | `src/gateway/server-http.ts` | In `attachGatewayUpgradeHandler()`: se path `/xiaozhi/v1/` → passa al bridge. Unica modifica al core.     |
-| 1.3 | **Protocollo XiaoZhi**       | 1.1        | `src/protocol.ts`            | Parser messaggi JSON (hello, listen, stt, tts, llm, abort, mcp) + frame binari Opus (versione 1 e 3).     |
-| 1.4 | **Bridge WebSocket**         | 1.2, 1.3   | `src/bridge.ts`              | Gestione connessioni device, handshake hello, session management, stato device (idle/listening/speaking). |
-| 1.5 | **Endpoint OTA**             | 1.1        | `src/ota.ts`                 | `registerHttpRoute("/xiaozhi/ota/")`. Risponde con URL WSS + token HMAC-SHA256.                           |
+| #    | Task                         | Dipende da | File/Posizione               | Dettaglio                                                                                                                                    |
+| ---- | ---------------------------- | ---------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.1  | ~~**Scaffold estensione**~~  | P2         | `extensions/xiaozhi/`        | **COMPLETATO** ✅ — `openclaw.plugin.json`, `package.json`, `index.ts`, tutti i file `src/`. Commit `c3cf410`.                               |
+| 1.1b | ~~**Channel plugin**~~       | 1.1        | `src/channel.ts`             | **COMPLETATO** ✅ — `xiaozhiChannelPlugin` con config, status, capabilities. Commit `1fbefcc`.                                               |
+| 1.1c | ~~**Tool MCP (stub)**~~      | 1.1        | `src/tools.ts`               | **COMPLETATO** ✅ — 5 tool stub: `laragoci_speak/emoji/volume/status/play`. `index.ts` cablato. Commit `29d575a`.                            |
+| 1.2  | **Patch WS upgrade handler** | P2         | `src/gateway/server-http.ts` | In `attachGatewayUpgradeHandler()`: se path `/xiaozhi/v1/` → passa al bridge. Richiede `registerWsUpgradeRoute` nel plugin-SDK. **PROSSIMO** |
+| 1.3  | **Protocollo XiaoZhi**       | 1.1        | `src/protocol.ts`            | Parser messaggi JSON (hello, listen, stt, tts, llm, abort, mcp) + frame binari Opus (versione 1 e 3).                                        |
+| 1.4  | **Bridge WebSocket**         | 1.2, 1.3   | `src/bridge.ts`              | Gestione connessioni device, handshake hello, session management, stato device (idle/listening/speaking).                                    |
+| 1.5  | **Endpoint OTA**             | 1.1        | `src/ota.ts`                 | `registerHttpRoute("/xiaozhi/ota/")`. Risponde con URL WSS + token HMAC-SHA256.                                                              |
 
 ## Fase 2: Audio pipeline
 
@@ -44,7 +46,7 @@
 | 2.1 | **Opus decode**                 | 1.4        | `src/audio-pipeline.ts` | Decodifica frame Opus (16kHz mono 60ms) → PCM con `@discordjs/opus`.                                                         |
 | 2.2 | **VAD**                         | 2.1        | `src/audio-pipeline.ts` | Voice Activity Detection. Dual-threshold con isteresi. `node-vad` (WebRTC) o Silero. Rileva fine frase dopo 1000ms silenzio. |
 | 2.3 | **STT (Whisper)**               | 2.2        | `src/audio-pipeline.ts` | Accumula PCM finche' VAD dice "fine" → chiama OpenAI Whisper API → ottiene testo.                                            |
-| 2.4 | **Integrazione agentCommand()** | 2.3        | `src/channel.ts`        | Chiama `agentCommand({ message: testo, sessionKey: "main", messageChannel: "xiaozhi" })`. Registra channel plugin "xiaozhi". |
+| 2.4 | **Integrazione agentCommand()** | 2.3        | `src/channel.ts`        | Chiama `agentCommand({ message: testo, sessionKey: "main", messageChannel: "xiaozhi" })`. Channel plugin già registrato ✅.  |
 | 2.5 | **TTS → Opus encode**           | 2.4        | `src/audio-pipeline.ts` | Risposta agente → OpenAI TTS (Nova) → PCM → Opus encode (24kHz mono 60ms 24kbps).                                            |
 | 2.6 | **Rate controller**             | 2.5        | `src/audio-pipeline.ts` | Pre-buffer 5 frame Opus + invio rate-controlled 60ms/frame. Messaggi `tts:start`, `tts:sentence_start`, `tts:stop`.          |
 | 2.7 | **Emoji display**               | 2.4        | `src/bridge.ts`         | Invia `{"type":"llm","emotion":"happy"}` al device. L'agente decide l'emozione nel contesto della risposta.                  |

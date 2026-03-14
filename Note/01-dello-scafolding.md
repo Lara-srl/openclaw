@@ -17,23 +17,40 @@ ESP32 (XiaoZhi firmware)
 Il firmware parla protocollo XiaoZhi (7 messaggi JSON + audio Opus binario).
 Il bridge traduce: Opus → Whisper STT → agente → TTS → Opus → device.
 
-## File creati nello scaffolding
+## Stato file (aggiornato 2026-03-14)
 
 ```
 extensions/xiaozhi/
-├── openclaw.plugin.json      # manifest plugin
-├── package.json              # dipendenze estensione
-├── index.ts                  # entry point / registrazione plugin
+├── openclaw.plugin.json      # manifest plugin ✅
+├── package.json              # dipendenze estensione ✅
+├── index.ts                  # entry point — channel + tools + lifecycle ✅
 └── src/
-    ├── bridge.ts             # WebSocket bridge (WS upgrade handler)
-    ├── protocol.ts           # parser protocollo XiaoZhi
-    ├── audio-pipeline.ts     # Opus ↔ PCM, VAD, Whisper STT, TTS
-    ├── config.ts             # configurazione estensione
-    ├── ota.ts                # endpoint OTA HTTP per aggiornamenti firmware
-    └── types.ts              # tipi TypeScript condivisi
+    ├── bridge.ts             # WebSocket bridge (stub — Phase 2) ✅
+    ├── protocol.ts           # parser protocollo XiaoZhi (stub — Phase 2) ✅
+    ├── audio-pipeline.ts     # Opus ↔ PCM, VAD, Whisper STT, TTS (stub — Phase 2) ✅
+    ├── channel.ts            # ChannelPlugin "xiaozhi" completo ✅
+    ├── config.ts             # configurazione estensione ✅
+    ├── ota.ts                # endpoint OTA HTTP (stub 501) ✅
+    ├── tools.ts              # 5 tool MCP stub (Phase 2 li implementa) ✅
+    └── types.ts              # tipi TypeScript condivisi ✅
 ```
 
-> **Nota:** `channel.ts` e `tools.ts` non ancora creati — prossimo step.
+### Tool MCP registrati (stub)
+
+| Tool              | Descrizione                     |
+| ----------------- | ------------------------------- |
+| `laragoci_speak`  | TTS testo → speaker device      |
+| `laragoci_emoji`  | Emozione → display LCD          |
+| `laragoci_volume` | Volume 0–100 via MCP tools/call |
+| `laragoci_status` | Stato connessione device        |
+| `laragoci_play`   | Play audio URL → speaker        |
+
+### Note tecniche emerse
+
+- `ChatType` corretto: `"direct"` (non `"dm"`)
+- `ChannelConfigSchema` vuole `{ schema: Record<string,unknown> }` → usare `buildChannelConfigSchema(ZodSchema)`
+- `AgentToolResult<T>`: `details` è obbligatorio (non optional) — usare pattern voice-call (type inferred, no alias locale)
+- `Type.Union` in tool schema: vietato (CLAUDE.md guardrail) — un `Type.Object` per tool
 
 ## Modello architetturale
 
@@ -45,14 +62,15 @@ Studiato `extensions/voice-call/` (Twilio) come riferimento:
 
 ## Unica modifica prevista al core
 
-`src/gateway/server-http.ts` → aggiungere path `/xiaozhi/v1/` nel WS upgrade handler.
+`src/gateway/server-http.ts` → aggiungere path `/xiaozhi/v1/` nell'upgrade handler WS.
+Richiede: `registerWsUpgradeRoute` nel plugin registry + plugin-SDK + `plugins-http.ts`.
 
 ## Step successivi
 
-1. Completare `src/channel.ts` — Channel plugin "xiaozhi" (come `voice-call/src/channel.ts`)
-2. Completare `src/tools.ts` — Tool MCP: `laragoci.speak`, `laragoci.emoji`, `laragoci.volume`
-3. Collegare `index.ts` al channel e ai tools
-4. Aggiungere path `/xiaozhi/v1/` in `src/gateway/server-http.ts`
+1. ~~Completare `src/channel.ts`~~ ✅
+2. ~~Completare `src/tools.ts`~~ ✅
+3. ~~Collegare `index.ts` al channel e ai tools~~ ✅
+4. **Patch WS upgrade handler** — `src/gateway/server-http.ts` + plugin-SDK (prossimo)
 5. Test locale con ESP32 fisico
 6. Documentazione in `docs/channels/xiaozhi.md`
 

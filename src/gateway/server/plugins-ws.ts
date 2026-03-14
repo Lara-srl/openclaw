@@ -13,18 +13,19 @@ export type PluginWsUpgradeHandlerFn = (
 
 /**
  * Creates a composed WS upgrade handler that iterates registered plugin handlers.
- * Returns null when there are no registered handlers (avoids unnecessary allocation).
+ * Checks the registry at invocation time so plugins registered after gateway start are included.
  */
 export function createGatewayPluginWsUpgradeHandler(params: {
   registry: PluginRegistry;
   log: SubsystemLogger;
-}): PluginWsUpgradeHandlerFn | null {
+}): PluginWsUpgradeHandlerFn {
   const { registry, log } = params;
-  if (!registry.wsUpgradeHandlers || registry.wsUpgradeHandlers.length === 0) {
-    return null;
-  }
   return (req, socket, head) => {
-    for (const entry of registry.wsUpgradeHandlers) {
+    const handlers = registry.wsUpgradeHandlers ?? [];
+    if (handlers.length === 0) {
+      return false;
+    }
+    for (const entry of handlers) {
       try {
         if (entry.handler(req, socket, head)) {
           return true;

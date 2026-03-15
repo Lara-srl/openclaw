@@ -59,7 +59,7 @@ Sviluppare LaraGoci, un AI Companion Device portatile che si connette via 4G a O
 LaraGoci Device ──4G──> OpenClaw VM ──API──> AI Provider
    (ESP32-S3)            (dedicata)           (Claude/GPT)
        │                     │
-       └─────WSS─────────────┴─── SSL: openclaw.lara-ai.eu
+       └─────WSS─────────────┴─── SSL: laragoci.lara-ai.eu
 ```
 
 ### Ogni utente riceve:

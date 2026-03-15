@@ -30,7 +30,7 @@ extensions/xiaozhi/
     ├── audio-pipeline.ts     # Opus ↔ PCM, VAD, Whisper STT, TTS (stub — Phase 2) ✅
     ├── channel.ts            # ChannelPlugin "xiaozhi" completo ✅
     ├── config.ts             # configurazione estensione ✅
-    ├── ota.ts                # endpoint OTA HTTP (stub 501) ✅
+    ├── ota.ts                # endpoint OTA HTTP — implementato ✅ (1.5)
     ├── tools.ts              # 5 tool MCP stub (Phase 2 li implementa) ✅
     └── types.ts              # tipi TypeScript condivisi ✅
 ```
@@ -87,10 +87,11 @@ Implementato pattern `registerWsUpgradeHandler` end-to-end:
 2. ~~Completare `src/tools.ts`~~ ✅
 3. ~~Collegare `index.ts` al channel e ai tools~~ ✅
 4. ~~**Patch WS upgrade handler** — plugin SDK + registry + server-http + bridge WS~~ ✅ (1.2+1.3+1.4)
-5. **SSL/TLS su `openclaw.lara-ai.eu`** — prerequisito P1 per ESP32 (4G)
-6. Test locale con wscat: `wscat -c ws://127.0.0.1:18789/xiaozhi/v1/ -H "Device-Id: test-001"`
-7. Test con ESP32 fisico
-8. Fase 2: audio pipeline (Opus, VAD, Whisper, TTS)
+5. ~~**SSL/TLS su `laragoci.lara-ai.eu`**~~ ✅ — Cloudflare Tunnel attivo, OTA verificato 2026-03-15
+6. **⏭ Prossimo step: Flash firmware XiaoZhi su ESP32-S3-BOX-3** (P3 roadmap) — vedi `Note/02_device.md`
+7. Test locale con wscat: `wscat -c ws://127.0.0.1:18789/xiaozhi/v1/ -H "Device-Id: test-001"`
+8. Test con ESP32 fisico
+9. Fase 2: audio pipeline (Opus, VAD, Whisper, TTS)
 
 ## Dipendenze da aggiungere
 

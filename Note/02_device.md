@@ -5,7 +5,7 @@ _Data: 2026-03-14_
 ## Prerequisiti prima di toccare il device
 
 - [x] Completare task 1.2 + 1.3 + 1.4 nel codice (bridge WS funzionante) ✅ 2026-03-14
-- [ ] SSL/TLS su `openclaw.lara-ai.eu` (P1) — senza certificato valido l'ESP32 rifiuta WSS
+- [x] SSL/TLS su `laragoci.lara-ai.eu` (P1) — Cloudflare Tunnel attivo, OTA endpoint verificato ✅
 
 ---
 
@@ -46,7 +46,7 @@ Il nostro endpoint OTA (task 1.5) risponde con:
 
 ```json
 {
-  "url": "wss://openclaw.lara-ai.eu/xiaozhi/v1/",
+  "url": "wss://laragoci.lara-ai.eu/xiaozhi/v1/",
   "token": "<hmac-sha256>"
 }
 ```
@@ -54,7 +54,7 @@ Il nostro endpoint OTA (task 1.5) risponde con:
 Configurare nel firmware l'URL OTA prima del flash:
 
 - Default OTA URL nel firmware XiaoZhi: `https://api.tenclass.net/xiaozhi/ota/`
-- Va cambiato in: `https://openclaw.lara-ai.eu/xiaozhi/ota/`
+- Va cambiato in: `https://laragoci.lara-ai.eu/xiaozhi/ota/`
 
 Questo si imposta nel file `sdkconfig` prima di compilare, oppure via web installer
 se supporta custom OTA URL.
@@ -77,7 +77,7 @@ Dalla console del device impostare manualmente l'URL WebSocket.
 
 ## Step 4 — Test handshake
 
-Dopo 1.2 + 1.3 + 1.4 completati e SSL attivo:
+Dopo 1.2 + 1.3 + 1.4 + 1.5 completati e SSL attivo (P1):
 
 1. Avvia il gateway OpenClaw sulla VM
 2. Accendi il BOX-3

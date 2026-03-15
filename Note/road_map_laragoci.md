@@ -1,7 +1,9 @@
 # Roadmap LaraGoci — Task per Claude
 
 > Roadmap sintetica e operativa. Per dettagli tecnici, protocollo e architettura vedi [laragoci.md](laragoci.md)
-> **Data:** 2026-02-19 — **Ultimo aggiornamento:** 2026-03-14 (task 1.2+1.3+1.4 completati)
+> **Data:** 2026-02-19 — **Ultimo aggiornamento:** 2026-03-15 (P1 SSL completato — Cloudflare Tunnel)
+
+> **⏭ Prossimo step: P3 — Flash firmware XiaoZhi su ESP32-S3-BOX-3**
 
 ---
 
@@ -18,12 +20,12 @@
 
 ## Prerequisiti (bloccanti)
 
-| #   | Task                                        | Dipende da | Note                                                                                                                                |
-| --- | ------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| P1  | **SSL/TLS su openclaw.lara-ai.eu**          | —          | Let's Encrypt wildcard \*.lara-ai.eu. Vedi [plans/2026-02-16-ssl-setup.md](plans/2026-02-16-ssl-setup.md). SSL obbligatorio per 4G. |
-| P2  | **Clone + build OpenClaw da sorgente**      | —          | **COMPLETATO** ✅ — VM `ubuntu-8gb-hel1-1` (Hetzner CX22 8GB, Ubuntu 24.04). Clone, `pnpm install`, build OK. Versione 2026.2.26.   |
-| P3  | **Flash firmware XiaoZhi su BOX-3**         | —          | Firmware precompilato, flash via web installer o esptool.                                                                           |
-| P4  | **Test hardware con server XiaoZhi Docker** | P3         | Validare che mic/speaker/display funzionano. Deploy docker xiaozhi-esp32-server temporaneo.                                         |
+| #   | Task                                        | Dipende da | Note                                                                                                                              |
+| --- | ------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| P1  | **SSL/TLS su laragoci.lara-ai.eu**          | —          | **COMPLETATO** ✅ — Cloudflare Tunnel (`cloudflared`), OTA endpoint verificato.                                                   |
+| P2  | **Clone + build OpenClaw da sorgente**      | —          | **COMPLETATO** ✅ — VM `ubuntu-8gb-hel1-1` (Hetzner CX22 8GB, Ubuntu 24.04). Clone, `pnpm install`, build OK. Versione 2026.2.26. |
+| P3  | **Flash firmware XiaoZhi su BOX-3**         | —          | Firmware precompilato, flash via web installer o esptool.                                                                         |
+| P4  | **Test hardware con server XiaoZhi Docker** | P3         | Validare che mic/speaker/display funzionano. Deploy docker xiaozhi-esp32-server temporaneo.                                       |
 
 ---
 
@@ -37,7 +39,7 @@
 | 1.2  | ~~**Patch WS upgrade handler**~~ | P2         | `src/gateway/server-http.ts` + `src/plugins/` | **COMPLETATO** ✅ — `registerWsUpgradeHandler` nel plugin-SDK + registry + factory `plugins-ws.ts` + `attachGatewayUpgradeHandler` aggiornato. |
 | 1.3  | ~~**Protocollo XiaoZhi**~~       | 1.1        | `src/protocol.ts`                             | **COMPLETATO** ✅ — `parseMessage`, `buildHello`, `buildStt`, `buildLlm`, `buildTts`.                                                          |
 | 1.4  | ~~**Bridge WebSocket**~~         | 1.2, 1.3   | `src/bridge.ts`                               | **COMPLETATO** ✅ — `WebSocketServer noServer`, `handleUpgrade` (path `/xiaozhi/v1`), session tracking UUID, hello handshake, close/error.     |
-| 1.5  | **Endpoint OTA**                 | 1.1        | `src/ota.ts`                                  | `registerHttpRoute("/xiaozhi/ota/")`. Risponde con URL WSS + token HMAC-SHA256.                                                                |
+| 1.5  | ~~**Endpoint OTA**~~             | 1.1        | `src/ota.ts`                                  | **COMPLETATO** ✅ — risponde con `{"url":"wss://...","token":"<hmac-sha256>"}`. Token opzionale se `secret` non configurato.                   |
 
 ## Fase 2: Audio pipeline
 
@@ -108,7 +110,7 @@ Server → Device:  hello, stt, llm (emotion), tts (start/sentence_start/stop), 
 ### Connessione
 
 ```
-URL:     wss://openclaw.lara-ai.eu/xiaozhi/v1/
+URL:     wss://laragoci.lara-ai.eu/xiaozhi/v1/
 OTA:     POST /xiaozhi/ota/
 Auth:    Bearer token HMAC-SHA256
 Headers: Authorization, Protocol-Version, Device-Id, Client-Id

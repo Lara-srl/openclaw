@@ -232,7 +232,7 @@ Ma il contesto conversazionale, la memoria e i tool sono gli stessi.
 
 ### Connessione WebSocket
 
-**URL:** `wss://openclaw.lara-ai.eu/xiaozhi/v1/` (da configurare)
+**URL:** `wss://laragoci.lara-ai.eu/xiaozhi/v1/` (da configurare)
 **Configurabile:** Si, via NVS, Kconfig (`CONFIG_WEBSOCKET_URL`), o risposta OTA
 
 **Header HTTP della connessione:**
@@ -472,7 +472,7 @@ Il firmware fa `POST /xiaozhi/ota/` al primo avvio per ottenere la config WebSoc
 {
   "server_time": { "timestamp": 1234567890, "timezone_offset": "+1" },
   "websocket": {
-    "url": "wss://openclaw.lara-ai.eu/xiaozhi/v1/",
+    "url": "wss://laragoci.lara-ai.eu/xiaozhi/v1/",
     "token": "hmac-signature.timestamp"
   }
 }
@@ -701,17 +701,19 @@ OpenClaw deve avere un MCP server dedicato per controllare LaraGoci come suo cor
 
 ### Server (Hetzner VPS)
 
-- **IP:** 89.167.32.145 / 2a01:4f9:c014:90e8::1
-- **OpenClaw:** v2026.2.2-3
+- **IP:** 77.42.93.2
+- **OpenClaw:** v2026.2.26
 - **Gateway:** porta 18789, `ws://127.0.0.1:18789`
-- **Tailscale:** serve mode
 
-### SSL/TLS (prerequisito critico)
+### SSL/TLS ✅
 
-- **Dominio:** `lara-ai.eu` — **Endpoint:** `openclaw.lara-ai.eu`
-- **Certificato:** Let's Encrypt wildcard `*.lara-ai.eu`
-- **Piano:** [plans/2026-02-16-ssl-setup.md](plans/2026-02-16-ssl-setup.md)
-- **Status:** In corso
+- **Dominio:** `lara-ai.eu` — **Endpoint:** `laragoci.lara-ai.eu`
+- **Soluzione:** Cloudflare Tunnel (`cloudflared`) — zero porte in ingresso, SSL gestito da Cloudflare
+- **Tunnel:** `de42f123-16bd-410c-83ee-e26094793a7a`, 4 connessioni su edge Frankfurt
+- **Servizio:** `cloudflared.service` (systemd, enabled, auto-restart)
+- **Ingress:** `laragoci.lara-ai.eu` → `http://127.0.0.1:18789`
+- **Verificato:** `curl https://laragoci.lara-ai.eu/xiaozhi/ota/` → `{"url":"wss://laragoci.lara-ai.eu/xiaozhi/v1/","token":""}` ✅
+- **Status:** **COMPLETATO** ✅ 2026-03-15
 
 ### Integrazioni attive
 
@@ -766,20 +768,20 @@ Il costo reale sono le API AI (Claude, Whisper, TTS) — incluse nell'abbonament
 
 ### FASE 1: Prototipo (WiFi only) — 2-3 settimane
 
-| #    | Task                                                            | Status                                   |
-| ---- | --------------------------------------------------------------- | ---------------------------------------- |
-| 1.0  | ~~Decidere approccio~~ → **XiaoZhi firmware + OpenClaw bridge** | **DECISO**                               |
-| 1.1  | SSL/TLS su openclaw.lara-ai.eu                                  | IN CORSO                                 |
-| 1.2  | Clone + build OpenClaw da sorgente (VM dedicata)                | **COMPLETATO** ✅ — v2026.2.26, build OK |
-| 1.3  | Flash firmware XiaoZhi sulla BOX-3                              | TODO                                     |
-| 1.4  | Test audio con server XiaoZhi Docker (validazione hardware)     | TODO                                     |
-| 1.5  | Creare estensione `extensions/xiaozhi/` (scaffold + manifest)   | TODO                                     |
-| 1.6  | Patch WS upgrade handler per path `/xiaozhi/v1/`                | TODO                                     |
-| 1.7  | Implementare bridge WebSocket (protocollo XiaoZhi)              | TODO                                     |
-| 1.8  | Audio pipeline: Opus→Whisper→agentCommand→TTS→Opus              | TODO                                     |
-| 1.9  | Emoji display via JSON emotion                                  | TODO                                     |
-| 1.10 | Tool MCP agente (laragoci.speak, .emoji, .volume)               | TODO                                     |
-| 1.11 | Endpoint OTA HTTP (`/xiaozhi/ota/`)                             | TODO                                     |
+| #    | Task                                                            | Status                                           |
+| ---- | --------------------------------------------------------------- | ------------------------------------------------ |
+| 1.0  | ~~Decidere approccio~~ → **XiaoZhi firmware + OpenClaw bridge** | **DECISO**                                       |
+| 1.1  | SSL/TLS su laragoci.lara-ai.eu                                  | **COMPLETATO** ✅ 2026-03-15 — Cloudflare Tunnel |
+| 1.2  | Clone + build OpenClaw da sorgente (VM dedicata)                | **COMPLETATO** ✅ — v2026.2.26, build OK         |
+| 1.3  | Flash firmware XiaoZhi sulla BOX-3                              | TODO                                             |
+| 1.4  | Test audio con server XiaoZhi Docker (validazione hardware)     | TODO                                             |
+| 1.5  | Creare estensione `extensions/xiaozhi/` (scaffold + manifest)   | TODO                                             |
+| 1.6  | Patch WS upgrade handler per path `/xiaozhi/v1/`                | TODO                                             |
+| 1.7  | Implementare bridge WebSocket (protocollo XiaoZhi)              | TODO                                             |
+| 1.8  | Audio pipeline: Opus→Whisper→agentCommand→TTS→Opus              | TODO                                             |
+| 1.9  | Emoji display via JSON emotion                                  | TODO                                             |
+| 1.10 | Tool MCP agente (laragoci.speak, .emoji, .volume)               | TODO                                             |
+| 1.11 | Endpoint OTA HTTP (`/xiaozhi/ota/`)                             | TODO                                             |
 
 ### FASE 2: Integrazione completa — 2-3 settimane
 
@@ -812,7 +814,8 @@ Il costo reale sono le API AI (Claude, Whisper, TTS) — incluse nell'abbonament
 - [x] Documentazione progetto (Google Drive)
 - [x] Business model
 - [x] Dominio lara-ai.eu + email Microsoft 365
-- [x] DNS (openclaw.lara-ai.eu → 89.167.32.145)
+- [x] DNS (laragoci.lara-ai.eu → Cloudflare Tunnel CNAME, 2026-03-15)
+- [x] SSL/TLS via Cloudflare Tunnel — OTA endpoint verificato ✅
 - [x] Claude Sonnet 4 + Whisper + TTS
 - [x] Google Workspace + WhatsApp
 - [x] Ricerca ESPHome (scartato)

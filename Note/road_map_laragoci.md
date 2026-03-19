@@ -3,7 +3,8 @@
 > Roadmap sintetica e operativa. Per dettagli tecnici, protocollo e architettura vedi [laragoci.md](laragoci.md)
 > **Data:** 2026-02-19 — **Ultimo aggiornamento:** 2026-03-15 (P1 SSL completato — Cloudflare Tunnel)
 
-> **⏭ Prossimo step: P3 — Flash firmware XiaoZhi su ESP32-S3-BOX-3**
+> **⏭ Prossimo step: Fase 2 — Audio pipeline (task 2.1 → 2.6)**
+> Piano dettagliato: `.claude/plans/iterative-stirring-yeti.md`
 
 ---
 
@@ -43,15 +44,15 @@
 
 ## Fase 2: Audio pipeline
 
-| #   | Task                            | Dipende da | File/Posizione          | Dettaglio                                                                                                                    |
-| --- | ------------------------------- | ---------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| 2.1 | **Opus decode**                 | 1.4        | `src/audio-pipeline.ts` | Decodifica frame Opus (16kHz mono 60ms) → PCM con `@discordjs/opus`.                                                         |
-| 2.2 | **VAD**                         | 2.1        | `src/audio-pipeline.ts` | Voice Activity Detection. Dual-threshold con isteresi. `node-vad` (WebRTC) o Silero. Rileva fine frase dopo 1000ms silenzio. |
-| 2.3 | **STT (Whisper)**               | 2.2        | `src/audio-pipeline.ts` | Accumula PCM finche' VAD dice "fine" → chiama OpenAI Whisper API → ottiene testo.                                            |
-| 2.4 | **Integrazione agentCommand()** | 2.3        | `src/channel.ts`        | Chiama `agentCommand({ message: testo, sessionKey: "main", messageChannel: "xiaozhi" })`. Channel plugin già registrato ✅.  |
-| 2.5 | **TTS → Opus encode**           | 2.4        | `src/audio-pipeline.ts` | Risposta agente → OpenAI TTS (Nova) → PCM → Opus encode (24kHz mono 60ms 24kbps).                                            |
-| 2.6 | **Rate controller**             | 2.5        | `src/audio-pipeline.ts` | Pre-buffer 5 frame Opus + invio rate-controlled 60ms/frame. Messaggi `tts:start`, `tts:sentence_start`, `tts:stop`.          |
-| 2.7 | **Emoji display**               | 2.4        | `src/bridge.ts`         | Invia `{"type":"llm","emotion":"happy"}` al device. L'agente decide l'emozione nel contesto della risposta.                  |
+| #   | Task                            | Dipende da | File/Posizione          | Dettaglio                                                                                                                                                                                                      |
+| --- | ------------------------------- | ---------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2.1 | **Opus decode**                 | 1.4        | `src/audio-pipeline.ts` | Decodifica frame Opus (16kHz mono 60ms) → PCM con `@discordjs/opus`. **Nota: il device fa già VAD** — manda listen:start/stop, non serve VAD server-side.                                                      |
+| 2.2 | ~~**VAD**~~                     | —          | —                       | **NON NECESSARIO** — il device manda `listen:stop` quando rileva silenzio. Rimosso dal piano.                                                                                                                  |
+| 2.3 | **STT (Whisper)**               | 2.1        | `src/audio-pipeline.ts` | Buffer Opus tra listen:start e listen:stop → Whisper API (language: "it") → testo. Trigger "ehi lara" → agente. No trigger → silent ack (tts:start+stop). Dialog mode: 30s window per follow-up senza trigger. |
+| 2.4 | **Integrazione agentCommand()** | 2.3        | `src/channel.ts`        | Chiama `agentCommand({ message: testo, sessionKey: "main", messageChannel: "xiaozhi" })`. Channel plugin già registrato ✅.                                                                                    |
+| 2.5 | **TTS → Opus encode**           | 2.4        | `src/audio-pipeline.ts` | Risposta agente → OpenAI TTS (pcm_24000, Nova) → PCM → Opus encode (24kHz mono 60ms). Rate control 60ms/frame.                                                                                                 |
+| 2.6 | **Rate controller**             | 2.5        | `src/audio-pipeline.ts` | Invio rate-controlled 60ms/frame. Messaggi `tts:start`, `tts:sentence_start`, `tts:stop`. Dopo tts:stop il device torna automaticamente in listen:start (dialog mode nativo firmware).                         |
+| 2.7 | **Emoji display**               | 2.4        | `src/bridge.ts`         | Invia `{"type":"llm","emotion":"happy"}` al device. L'agente decide l'emozione nel contesto della risposta.                                                                                                    |
 
 ## Fase 3: Tool MCP agente
 

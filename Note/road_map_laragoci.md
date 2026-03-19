@@ -24,7 +24,7 @@
 | --- | ------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | P1  | **SSL/TLS su laragoci.lara-ai.eu**          | —          | **COMPLETATO** ✅ — Cloudflare Tunnel (`cloudflared`), OTA endpoint verificato.                                                   |
 | P2  | **Clone + build OpenClaw da sorgente**      | —          | **COMPLETATO** ✅ — VM `ubuntu-8gb-hel1-1` (Hetzner CX22 8GB, Ubuntu 24.04). Clone, `pnpm install`, build OK. Versione 2026.2.26. |
-| P3  | **Flash firmware XiaoZhi su BOX-3**         | —          | Firmware precompilato, flash via web installer o esptool.                                                                         |
+| P3  | **Flash firmware XiaoZhi su BOX-3**         | —          | **COMPLETATO** ✅ — ESP-IDF v5.5.3, firmware custom con OTA URL laragoci.lara-ai.eu, wake word disabled, handshake WS verificato. |
 | P4  | **Test hardware con server XiaoZhi Docker** | P3         | Validare che mic/speaker/display funzionano. Deploy docker xiaozhi-esp32-server temporaneo.                                       |
 
 ---
@@ -65,15 +65,15 @@
 
 ## Fase 4: Testing e integrazione
 
-| #   | Task                        | Dipende da | Dettaglio                                                |
-| --- | --------------------------- | ---------- | -------------------------------------------------------- |
-| 4.1 | **Test handshake**          | 1.4, 1.5   | Device si connette, riceve hello, ottiene session_id.    |
-| 4.2 | **Test audio round-trip**   | 2.6        | Parla al device → testo sullo schermo → risposta audio.  |
-| 4.3 | **Test emoji**              | 2.7        | Verifica che le emoji appaiono sul display LCD.          |
-| 4.4 | **Test tool MCP**           | 3.1-3.4    | Heartbeat → agente parla sul device proattivamente.      |
-| 4.5 | **Test sessione condivisa** | 4.2        | Scrivi su WhatsApp, chiedi al device — stessa memoria.   |
-| 4.6 | **Test abort**              | 2.6        | Interrompi l'agente mentre parla (wake word o pulsante). |
-| 4.7 | **Test reconnection**       | 1.4        | Disconnect/reconnect con backoff esponenziale.           |
+| #   | Task                        | Dipende da | Dettaglio                                                                              |
+| --- | --------------------------- | ---------- | -------------------------------------------------------------------------------------- |
+| 4.1 | **Test handshake**          | 1.4, 1.5   | **COMPLETATO** ✅ — Device connesso, hello ricevuto, session_id assegnato. 2026-03-19. |
+| 4.2 | **Test audio round-trip**   | 2.6        | Parla al device → testo sullo schermo → risposta audio.                                |
+| 4.3 | **Test emoji**              | 2.7        | Verifica che le emoji appaiono sul display LCD.                                        |
+| 4.4 | **Test tool MCP**           | 3.1-3.4    | Heartbeat → agente parla sul device proattivamente.                                    |
+| 4.5 | **Test sessione condivisa** | 4.2        | Scrivi su WhatsApp, chiedi al device — stessa memoria.                                 |
+| 4.6 | **Test abort**              | 2.6        | Interrompi l'agente mentre parla (wake word o pulsante).                               |
+| 4.7 | **Test reconnection**       | 1.4        | Disconnect/reconnect con backoff esponenziale.                                         |
 
 ## Fase 5: Funzionalita' avanzate (post-MVP)
 

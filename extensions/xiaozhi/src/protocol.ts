@@ -12,9 +12,22 @@ export function parseMessage(data: string | Buffer): XiaozhuMessage {
 
 /**
  * Build the initial hello frame sent to a connecting device.
+ * version, session_id, transport and audio_params are all required —
+ * the firmware crashes in ParseServerHello() if any field is missing.
  */
 export function buildHello(sessionId: string): string {
-  return JSON.stringify({ type: "hello", sessionId });
+  return JSON.stringify({
+    type: "hello",
+    version: 3,
+    session_id: sessionId,
+    transport: "websocket",
+    audio_params: {
+      format: "opus",
+      sample_rate: 16000,
+      channels: 1,
+      frame_duration: 60,
+    },
+  });
 }
 
 /** Build a speech-to-text result frame. */

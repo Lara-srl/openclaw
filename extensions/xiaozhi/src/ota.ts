@@ -39,7 +39,14 @@ export function handleOtaRequest(
   const wsUrl = resolveWsUrl(req, config.wsPath);
   const token = config.secret ? generateToken(deviceId, config.secret) : "";
 
-  const body = JSON.stringify({ url: wsUrl, token });
+  const body = JSON.stringify({
+    websocket: { url: wsUrl, token },
+    server_time: {
+      timestamp: Math.floor(Date.now() / 1000),
+      timezone_offset: 3600, // UTC+1 (Italy)
+    },
+    firmware: { version: "", url: "" },
+  });
   res.writeHead(200, {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(body),

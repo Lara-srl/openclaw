@@ -61,7 +61,6 @@ export class XiaozhiBridge {
             if (msg.payload) pipeline.onAudioFrame(msg.payload);
             break;
           case "listen":
-            console.log(`[xiaozhi] listen:${msg.state} session=${sessionId}`);
             if (msg.state === "start") pipeline.onListenStart();
             if (msg.state === "stop") pipeline.onListenStop();
             break;
@@ -74,10 +73,13 @@ export class XiaozhiBridge {
       }
     });
 
-    // B3: keepalive every 10s — prevents NAT/Cloudflare idle timeout
+    // B3: keepalive every 10s — prevents NAT/Cloudflare idle timeout.
+    // Must send a WebSocket DATA frame (not just PING control frames): Cloudflare Tunnel
+    // counts only data frames as activity; after ~60s without data it closes the connection.
     const keepalive = setInterval(() => {
-      console.log(`[xiaozhi] keepalive ping session=${sessionId} readyState=${ws.readyState}`);
-      if (ws.readyState === ws.OPEN) ws.ping();
+      if (ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify({ type: "ping" }));
+      }
     }, 10_000);
 
     ws.on("close", (code, reason) => {

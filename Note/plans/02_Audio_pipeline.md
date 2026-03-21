@@ -1,6 +1,6 @@
 # Piano Fase 2 — Audio Pipeline
 
-> Creato: 2026-03-20 — Aggiornato: 2026-03-21 — Stato: bug B1-B4 risolti ✅ — pipeline 2.1→2.7 da implementare
+> Creato: 2026-03-20 — Aggiornato: 2026-03-21 — Stato: B1-B4 risolti ✅, pipeline 2.1→2.7 implementata ✅, B5 Cloudflare risolto ✅ — da testare: premere bottone → round-trip audio
 
 ---
 
@@ -49,6 +49,31 @@ il bottone è atteso (Phase 1 stub — il bridge non risponde con STT/TTS → de
 
 - Aggiunto `console.log` su connect/disconnect con session ID, device MAC, WS close code
 - `cloudflared` (PID 36774, running dal Mar15) è stabile — non causa i disconnect
+
+### B5 — Cloudflare Tunnel chiude connessione dopo ~60s ✅ RISOLTO 2026-03-21
+
+**File:** `extensions/xiaozhi/src/bridge.ts`
+**Sintomo:** disconnect code=1006 esattamente ~64s dopo la connessione, nonostante keepalive `ws.ping()` ogni 10s
+**Diagnostica (2026-03-21 23:07-23:08):**
+
+```
+23:07:42 connected session=54df8d52
+23:07:42 listen:start (device si è connesso e ha mandato listen:start subito)
+23:07:52 keepalive ping readyState=1  ← ping funziona, connessione OPEN
+23:08:02 keepalive ping readyState=1
+23:08:12 keepalive ping readyState=1
+23:08:22 keepalive ping readyState=1
+23:08:32 keepalive ping readyState=1
+23:08:42 keepalive ping readyState=1  ← ultimo ping, 60s dall'inizio
+23:08:46 disconnected code=1006       ← 4s dopo l'ultimo ping
+```
+
+**Causa:** Cloudflare Tunnel considera i WebSocket PING/PONG come control frames, non come dati.
+Dopo ~60s senza DATA frames dal server verso il device, Cloudflare chiude la connessione.
+Il keepalive con `ws.ping()` (WS control frame) non è sufficiente.
+**Fix:** sostituire `ws.ping()` con `ws.send(JSON.stringify({type:"ping"}))` — TEXT data frame.
+Il firmware XiaoZhi ignora message types sconosciuti.
+**File:** `extensions/xiaozhi/src/bridge.ts` — `setInterval` con `ws.send(JSON.stringify({type:"ping"}))` ogni 10s.
 
 ### B4 — `parseMessage` crasha su frame Opus binari ✅ RISOLTO 2026-03-21
 

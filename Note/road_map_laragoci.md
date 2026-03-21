@@ -53,12 +53,13 @@
 
 ### Bug da fixare prima della pipeline (trovati da serial monitor 2026-03-20)
 
-| #   | Bug                                                                  | File                 | Fix                          | Stato             |
-| --- | -------------------------------------------------------------------- | -------------------- | ---------------------------- | ----------------- |
-| B1  | `buildHello` manda `sample_rate: 16000` invece di 24000              | `src/protocol.ts:29` | 1 riga                       | **✅ 2026-03-21** |
-| B2  | `buildTts` usa campo `action` invece di `state`                      | `src/protocol.ts:47` | 1 riga                       | **✅ 2026-03-21** |
-| B3  | Connessione cade per NAT timeout router (~20s idle)                  | `src/bridge.ts`      | `ws.ping()` ogni 10s         | **✅ 2026-03-21** |
-| B4  | `parseMessage` tenta `JSON.parse` su frame Opus binari (protocol v1) | `src/protocol.ts:8`  | discrimina Buffer vs stringa | **✅ 2026-03-21** |
+| #   | Bug                                                                                        | File                 | Fix                                            | Stato             |
+| --- | ------------------------------------------------------------------------------------------ | -------------------- | ---------------------------------------------- | ----------------- |
+| B1  | `buildHello` manda `sample_rate: 16000` invece di 24000                                    | `src/protocol.ts:29` | 1 riga                                         | **✅ 2026-03-21** |
+| B2  | `buildTts` usa campo `action` invece di `state`                                            | `src/protocol.ts:47` | 1 riga                                         | **✅ 2026-03-21** |
+| B3  | Connessione cade per NAT timeout router (~20s idle)                                        | `src/bridge.ts`      | `ws.ping()` ogni 10s                           | **✅ 2026-03-21** |
+| B4  | `parseMessage` tenta `JSON.parse` su frame Opus binari (protocol v1)                       | `src/protocol.ts:8`  | discrimina Buffer vs stringa                   | **✅ 2026-03-21** |
+| B5  | Cloudflare Tunnel chiude la connessione dopo ~60s (PING/PONG non contano come data frames) | `src/bridge.ts`      | `ws.send({type:"ping"})` invece di `ws.ping()` | **✅ 2026-03-21** |
 
 ### Tasks
 

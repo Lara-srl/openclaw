@@ -72,8 +72,32 @@ il bottone è atteso (Phase 1 stub — il bridge non risponde con STT/TTS → de
 Dopo ~60s senza DATA frames dal server verso il device, Cloudflare chiude la connessione.
 Il keepalive con `ws.ping()` (WS control frame) non è sufficiente.
 **Fix:** sostituire `ws.ping()` con `ws.send(JSON.stringify({type:"ping"}))` — TEXT data frame.
-Il firmware XiaoZhi ignora message types sconosciuti.
+Il firmware XiaoZhi ignora message types sconosciuti (logga `Unknown message type: ping`, non crasha).
 **File:** `extensions/xiaozhi/src/bridge.ts` — `setInterval` con `ws.send(JSON.stringify({type:"ping"}))` ogni 10s.
+**Nota:** B5 parzialmente risolto → vedi B6.
+
+### B6 — Fritz!Box NAT timeout ~9.2s, keepalive 10s troppo lento 🔄 IN CORSO 2026-03-21
+
+**File:** `extensions/xiaozhi/src/bridge.ts`
+**Sintomo:** dopo il fix B5 (data frame ogni 10s), connessione cade ancora a ~19-20s.
+**Diagnostica (session 132db34e, 2026-03-21 23:17):**
+
+```
+Connessione a device uptime 55714ms
+W (65314) Application: Unknown message type: ping  ← ping ricevuto a t=9.6s dalla connessione
+I (74544) SystemInfo: free sram                    ← t=18.8s
+E (74904) EspSsl: SSL receive failed: -76          ← disconnect a t=19.2s
+```
+
+**Calcolo:** ping refresh NAT a t=9.6s → NAT timeout 9.2s → NAT cade a 9.6+9.2=18.8s.
+Prossimo ping a t=19.6s (10s dopo il primo). 18.8 < 19.6 → connessione cade 800ms PRIMA del ping.
+**Causa:** `ws.ping()` (control frame) mandava PING + riceveva PONG dal device → due pacchetti TCP
+(uno per direzione) ogni 10s, refresh NAT in entrambe le direzioni. Con `ws.send()` (data frame),
+solo server→device → il device NON risponde → NAT del Fritz!Box vede solo metà del traffico.
+**Fix:** ridurre keepalive da `10_000` a `8_000` ms + inviare ENTRAMBI: data frame E ws.ping().
+Questo garantisce: data flow per Cloudflare (data frame) + PONG bidirezionale per NAT (control frame).
+**Gateway log (session d846296c):** connected 23:16:22, disconnected 23:16:55 = 33s (utente ha premuto bottone, Opus frames hanno temporaneamente tenuto in vita il NAT).
+**Gateway log (session 132db34e):** connected 23:17:00, disconnected 23:17:20 = 20s (no button, solo keepalive, cade per NAT race condition).
 
 ### B4 — `parseMessage` crasha su frame Opus binari ✅ RISOLTO 2026-03-21
 

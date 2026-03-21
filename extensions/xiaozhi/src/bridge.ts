@@ -73,14 +73,16 @@ export class XiaozhiBridge {
       }
     });
 
-    // B3: keepalive every 10s — prevents NAT/Cloudflare idle timeout.
-    // Must send a WebSocket DATA frame (not just PING control frames): Cloudflare Tunnel
-    // counts only data frames as activity; after ~60s without data it closes the connection.
+    // B3/B5/B6: keepalive every 8s.
+    // - Data frame (ws.send) keeps Cloudflare Tunnel alive (control frames don't count).
+    // - Control frame (ws.ping) triggers device PONG → bidirectional TCP traffic → Fritz!Box NAT reset.
+    // Fritz!Box NAT timeout ≈ 9.2s; 8s interval ensures we beat it in both directions.
     const keepalive = setInterval(() => {
       if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ type: "ping" }));
+        ws.send(JSON.stringify({ type: "ping" })); // data frame for Cloudflare
+        ws.ping(); // control frame for NAT bidirectional keepalive
       }
-    }, 10_000);
+    }, 8_000);
 
     ws.on("close", (code, reason) => {
       clearInterval(keepalive);

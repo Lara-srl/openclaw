@@ -2,14 +2,15 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
+import { AudioPipeline } from "./audio-pipeline.js";
 import { buildHello, parseMessage } from "./protocol.js";
-import type { DeviceSession } from "./types.js";
+import type { BridgeDeps, DeviceSession } from "./types.js";
 
 export class XiaozhiBridge {
   private sessions = new Map<string, DeviceSession>();
   private wss: WebSocketServer;
 
-  constructor() {
+  constructor(private deps: BridgeDeps) {
     this.wss = new WebSocketServer({ noServer: true });
     this.wss.on("connection", (ws: WebSocket, req: IncomingMessage) =>
       this.handleConnection(ws, req),
@@ -43,26 +44,56 @@ export class XiaozhiBridge {
       deviceId,
     };
     this.sessions.set(sessionId, session);
+    console.log(`[xiaozhi] connected session=${sessionId} device=${deviceId ?? "unknown"}`);
 
     // Handshake: send hello frame
     ws.send(buildHello(sessionId));
 
+    // One AudioPipeline per device session
+    const pipeline = new AudioPipeline(ws, this.deps);
+
     ws.on("message", (data) => {
       try {
         const msg = parseMessage(data as Buffer | string);
-        // Phase 2: route msg.type → audio pipeline / agent
-        void msg;
+        switch (msg.type) {
+          case "audio":
+            // Raw Opus frame from device mic
+            if (msg.payload) pipeline.onAudioFrame(msg.payload);
+            break;
+          case "listen":
+            console.log(`[xiaozhi] listen:${msg.state} session=${sessionId}`);
+            if (msg.state === "start") pipeline.onListenStart();
+            if (msg.state === "stop") pipeline.onListenStop();
+            break;
+          case "abort":
+            pipeline.onAbort();
+            break;
+        }
       } catch {
         // Malformed frame — ignore silently
       }
     });
 
-    ws.on("close", () => {
+    // B3: keepalive every 10s — prevents NAT/Cloudflare idle timeout
+    const keepalive = setInterval(() => {
+      console.log(`[xiaozhi] keepalive ping session=${sessionId} readyState=${ws.readyState}`);
+      if (ws.readyState === ws.OPEN) ws.ping();
+    }, 10_000);
+
+    ws.on("close", (code, reason) => {
+      clearInterval(keepalive);
+      pipeline.destroy();
       this.sessions.delete(sessionId);
+      console.log(
+        `[xiaozhi] disconnected session=${sessionId} code=${code} reason=${reason.toString()}`,
+      );
     });
 
-    ws.on("error", () => {
+    ws.on("error", (err) => {
+      clearInterval(keepalive);
+      pipeline.destroy();
       this.sessions.delete(sessionId);
+      console.error(`[xiaozhi] ws error session=${sessionId}`, err);
     });
   }
 

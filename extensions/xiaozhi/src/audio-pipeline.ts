@@ -1,16 +1,403 @@
 /**
- * AudioPipeline handles Opus encode/decode between the ESP32-S3-BOX-3 device
- * and the OpenClaw agent loop.
- * TODO: implement full audio pipeline (Phase 2).
+ * AudioPipeline — Phase 2
+ * Per-session state machine: IDLE → LISTENING → PROCESSING → SPEAKING → IDLE
+ *
+ * Upload  (device → server): Opus 16kHz mono 60ms/frame, protocol v1 (raw, no header)
+ * Download (server → device): Opus 24kHz mono 60ms/frame, 24kbps, complexity 10
  */
+
+import { randomUUID } from "node:crypto";
+import { OpusEncoder } from "@discordjs/opus";
+import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
+import type { WebSocket } from "ws";
+import { loadCoreAgentDeps } from "./core-bridge.js";
+import { buildLlm, buildStt, buildTts } from "./protocol.js";
+
+// ─── Audio constants ──────────────────────────────────────────────────────────
+
+const UPLOAD_RATE = 16_000; // mic: device → server
+const DOWNLOAD_RATE = 24_000; // speaker: server → device
+const DOWNLOAD_BITRATE = 24_000; // 24 kbps
+const FRAME_MS = 60;
+const DOWNLOAD_FRAME_SAMPLES = (DOWNLOAD_RATE * FRAME_MS) / 1000; // 1440
+const BYTES_PER_SAMPLE = 2; // 16-bit signed LE
+const DOWNLOAD_FRAME_BYTES = DOWNLOAD_FRAME_SAMPLES * BYTES_PER_SAMPLE; // 2880
+
+// Opus encoder CTL codes
+const OPUS_SET_COMPLEXITY_REQUEST = 4010;
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type PipelineState = "idle" | "listening" | "processing" | "speaking";
+
+export type AudioPipelineDeps = {
+  config: OpenClawConfig;
+  runtime: PluginRuntime;
+};
+
+// ─── AudioPipeline ────────────────────────────────────────────────────────────
+
 export class AudioPipeline {
-  /** TODO: start streaming audio from device (Phase 2). */
-  start(): void {
-    // TODO: Phase 2
+  private state: PipelineState = "idle";
+  private opusFrames: Buffer[] = [];
+  /** Incremented on every abort/listen-start to invalidate in-flight process(). */
+  private generation = 0;
+  private speakingTimer: ReturnType<typeof setTimeout> | null = null;
+  private decoder: OpusEncoder;
+  private encoder: OpusEncoder;
+
+  constructor(
+    private ws: WebSocket,
+    private deps: AudioPipelineDeps,
+  ) {
+    this.decoder = new OpusEncoder(UPLOAD_RATE, 1);
+    this.encoder = new OpusEncoder(DOWNLOAD_RATE, 1);
+    this.encoder.setBitrate(DOWNLOAD_BITRATE);
+    this.encoder.applyEncoderCTL(OPUS_SET_COMPLEXITY_REQUEST, 10);
   }
 
-  /** TODO: stop audio pipeline and release resources (Phase 2). */
-  stop(): void {
-    // TODO: Phase 2
+  /** Called for every binary Opus frame received from the device. */
+  onAudioFrame(frame: Buffer): void {
+    if (this.state === "listening") {
+      this.opusFrames.push(frame);
+    }
   }
+
+  /** Device pressed button: start buffering audio. */
+  onListenStart(): void {
+    if (this.state !== "idle") return;
+    this.generation++;
+    this.state = "listening";
+    this.opusFrames = [];
+  }
+
+  /** Device released button (VAD stop): run the pipeline. */
+  onListenStop(): void {
+    if (this.state !== "listening") return;
+    this.state = "processing";
+    const frames = this.opusFrames;
+    this.opusFrames = [];
+    void this.process(frames, this.generation);
+  }
+
+  /** Abort from device in any state: cancel everything, go idle. */
+  onAbort(): void {
+    this.generation++;
+    this.clearSpeakingTimer();
+    if (this.state === "speaking") {
+      this.sendJson(buildTts("stop"));
+    }
+    this.state = "idle";
+    this.opusFrames = [];
+  }
+
+  /** Called on WS close — release resources. */
+  destroy(): void {
+    this.generation++;
+    this.clearSpeakingTimer();
+    this.state = "idle";
+  }
+
+  // ─── Internal pipeline ──────────────────────────────────────────────────────
+
+  private async process(frames: Buffer[], gen: number): Promise<void> {
+    try {
+      // 2.1 — Opus → PCM (16kHz mono)
+      const pcmChunks: Buffer[] = [];
+      for (const frame of frames) {
+        try {
+          pcmChunks.push(this.decoder.decode(frame));
+        } catch {
+          // corrupted frame — skip
+        }
+      }
+      const pcm16k = Buffer.concat(pcmChunks);
+
+      if (gen !== this.generation) return;
+
+      // 2.3 — Whisper STT
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey || pcm16k.length === 0) {
+        this.silentAck();
+        return;
+      }
+
+      const wav = buildWav(pcm16k, UPLOAD_RATE, 1);
+      const text = await whisperTranscribe(wav, apiKey);
+
+      if (gen !== this.generation) return;
+
+      if (!text?.trim()) {
+        this.silentAck();
+        return;
+      }
+
+      // Show transcription on device screen
+      this.sendJson(buildStt(text));
+
+      // 2.4 — Agent command
+      const response = await this.runAgent(text);
+
+      if (gen !== this.generation) return;
+
+      if (!response?.trim()) {
+        this.silentAck();
+        return;
+      }
+
+      // 2.7 — Emotion/emoji display before TTS
+      this.sendJson(buildLlm(response, "happy"));
+
+      // 2.5 + 2.6 — TTS → Opus encode → rate-controlled playback
+      await this.speak(response, gen);
+    } catch (err) {
+      console.error("[xiaozhi] pipeline error:", err);
+      if (gen === this.generation) {
+        this.silentAck();
+      }
+    }
+  }
+
+  /** Send tts:start + tts:stop with no audio — tells device the turn is over. */
+  private silentAck(): void {
+    this.sendJson(buildTts("start"));
+    this.sendJson(buildTts("stop"));
+    this.state = "idle";
+  }
+
+  private async speak(text: string, gen: number): Promise<void> {
+    if (gen !== this.generation) return;
+
+    // 2.5 — TTS → PCM via core runtime
+    const result = await this.deps.runtime.tts.textToSpeechTelephony({
+      text,
+      cfg: this.deps.config,
+    });
+
+    if (gen !== this.generation) return;
+
+    if (!result.success || !result.audioBuffer || !result.sampleRate) {
+      console.error("[xiaozhi] TTS failed:", result.error);
+      this.silentAck();
+      return;
+    }
+
+    // Resample to 24kHz if TTS provider returned a different rate
+    const pcm24k = resamplePcm(result.audioBuffer, result.sampleRate, DOWNLOAD_RATE);
+
+    // Encode PCM → Opus frames (60ms each)
+    const opusFrames: Buffer[] = [];
+    for (let i = 0; i < pcm24k.length; i += DOWNLOAD_FRAME_BYTES) {
+      const chunk = pcm24k.subarray(i, i + DOWNLOAD_FRAME_BYTES);
+      // Pad last frame to exactly 60ms
+      const padded =
+        chunk.length < DOWNLOAD_FRAME_BYTES
+          ? Buffer.concat([chunk, Buffer.alloc(DOWNLOAD_FRAME_BYTES - chunk.length)])
+          : chunk;
+      try {
+        opusFrames.push(this.encoder.encode(padded));
+      } catch {
+        // skip bad frame
+      }
+    }
+
+    if (gen !== this.generation || opusFrames.length === 0) {
+      if (gen === this.generation) this.silentAck();
+      return;
+    }
+
+    // 2.6 — Rate-controlled playback
+    this.state = "speaking";
+    this.sendJson(buildTts("start"));
+    this.sendJson(buildTts("sentence_start", text));
+
+    await this.sendFramesRateControlled(opusFrames, gen);
+
+    if (gen === this.generation) {
+      this.sendJson(buildTts("stop"));
+      this.state = "idle";
+      // device will automatically send listen:start (dialog mode)
+    }
+  }
+
+  /** Send Opus frames one at a time, one per FRAME_MS. */
+  private sendFramesRateControlled(frames: Buffer[], gen: number): Promise<void> {
+    return new Promise((resolve) => {
+      let i = 0;
+      const sendNext = () => {
+        if (gen !== this.generation || i >= frames.length) {
+          resolve();
+          return;
+        }
+        if (this.ws.readyState === this.ws.OPEN) {
+          this.ws.send(frames[i]);
+        }
+        i++;
+        this.speakingTimer = setTimeout(sendNext, FRAME_MS);
+      };
+      sendNext();
+    });
+  }
+
+  private clearSpeakingTimer(): void {
+    if (this.speakingTimer !== null) {
+      clearTimeout(this.speakingTimer);
+      this.speakingTimer = null;
+    }
+  }
+
+  // ─── Agent ───────────────────────────────────────────────────────────────────
+
+  private async runAgent(text: string): Promise<string | null> {
+    let deps: Awaited<ReturnType<typeof loadCoreAgentDeps>>;
+    try {
+      deps = await loadCoreAgentDeps();
+    } catch (err) {
+      console.error("[xiaozhi] core deps unavailable:", err);
+      return null;
+    }
+
+    // Cast to CoreConfig — OpenClawConfig is a superset
+    type CoreCfg = Parameters<typeof deps.resolveAgentDir>[0];
+    const cfg = this.deps.config as unknown as CoreCfg;
+
+    const agentId = "main";
+    const sessionKey = "main";
+
+    const storePath = deps.resolveStorePath(
+      (cfg as { session?: { store?: string } }).session?.store,
+      { agentId },
+    );
+    const agentDir = deps.resolveAgentDir(cfg, agentId);
+    const workspaceDir = deps.resolveAgentWorkspaceDir(cfg, agentId);
+
+    await deps.ensureAgentWorkspace({ dir: workspaceDir });
+
+    const sessionStore = deps.loadSessionStore(storePath);
+    type SessionEntry = { sessionId: string; updatedAt: number };
+    let entry = sessionStore[sessionKey] as SessionEntry | undefined;
+
+    if (!entry) {
+      entry = { sessionId: randomUUID(), updatedAt: Date.now() };
+      sessionStore[sessionKey] = entry;
+      await deps.saveSessionStore(storePath, sessionStore);
+    }
+
+    const sessionFile = deps.resolveSessionFilePath(entry.sessionId, entry, { agentId });
+    const timeoutMs = deps.resolveAgentTimeoutMs({ cfg });
+    const thinkLevel = deps.resolveThinkingDefault({ cfg });
+    const runId = `xiaozhi:${entry.sessionId}:${Date.now()}`;
+
+    try {
+      const result = await deps.runEmbeddedPiAgent({
+        sessionId: entry.sessionId,
+        sessionKey,
+        messageProvider: "xiaozhi",
+        sessionFile,
+        workspaceDir,
+        config: cfg,
+        prompt: text,
+        thinkLevel,
+        verboseLevel: "off",
+        timeoutMs,
+        runId,
+        lane: "xiaozhi",
+        agentDir,
+      });
+
+      const texts = (result.payloads ?? [])
+        .filter((p) => p.text && !p.isError)
+        .map((p) => p.text?.trim())
+        .filter(Boolean);
+
+      return texts.join(" ") || null;
+    } catch (err) {
+      console.error("[xiaozhi] agent error:", err);
+      return null;
+    }
+  }
+
+  private sendJson(msg: string): void {
+    if (this.ws.readyState === this.ws.OPEN) {
+      this.ws.send(msg);
+    }
+  }
+}
+
+// ─── WAV builder ──────────────────────────────────────────────────────────────
+
+function buildWav(pcm: Buffer, sampleRate: number, channels: number): Buffer {
+  const byteRate = sampleRate * channels * BYTES_PER_SAMPLE;
+  const blockAlign = channels * BYTES_PER_SAMPLE;
+  const header = Buffer.alloc(44);
+
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16); // PCM subchunk size
+  header.writeUInt16LE(1, 20); // PCM format
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(16, 34); // bits per sample
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(pcm.length, 40);
+
+  return Buffer.concat([header, pcm]);
+}
+
+// ─── Whisper STT ──────────────────────────────────────────────────────────────
+
+async function whisperTranscribe(wav: Buffer, apiKey: string): Promise<string | null> {
+  const form = new FormData();
+  form.append("file", new Blob([wav], { type: "audio/wav" }), "audio.wav");
+  form.append("model", "whisper-1");
+  form.append("language", "it");
+
+  let res: Response;
+  try {
+    res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+    });
+  } catch (err) {
+    console.error("[xiaozhi] Whisper fetch error:", err);
+    return null;
+  }
+
+  if (!res.ok) {
+    console.error(`[xiaozhi] Whisper HTTP ${res.status}:`, await res.text());
+    return null;
+  }
+
+  const json = (await res.json()) as { text?: string };
+  return json.text ?? null;
+}
+
+// ─── PCM resampler (linear interpolation) ─────────────────────────────────────
+
+function resamplePcm(input: Buffer, fromRate: number, toRate: number): Buffer {
+  if (fromRate === toRate) return input;
+
+  const inputSamples = Math.floor(input.length / BYTES_PER_SAMPLE);
+  if (inputSamples === 0) return Buffer.alloc(0);
+
+  const ratio = fromRate / toRate;
+  const outputSamples = Math.floor(inputSamples / ratio);
+  const output = Buffer.alloc(outputSamples * BYTES_PER_SAMPLE);
+
+  for (let i = 0; i < outputSamples; i++) {
+    const srcPos = i * ratio;
+    const srcIdx = Math.floor(srcPos);
+    const frac = srcPos - srcIdx;
+    const s0 = input.readInt16LE(srcIdx * BYTES_PER_SAMPLE);
+    const s1 = input.readInt16LE(Math.min(srcIdx + 1, inputSamples - 1) * BYTES_PER_SAMPLE);
+    const sample = Math.round(s0 + frac * (s1 - s0));
+    output.writeInt16LE(Math.max(-32768, Math.min(32767, sample)), i * BYTES_PER_SAMPLE);
+  }
+
+  return output;
 }

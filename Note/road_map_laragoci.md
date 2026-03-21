@@ -1,10 +1,10 @@
 # Roadmap LaraGoci — Task per Claude
 
 > Roadmap sintetica e operativa. Per dettagli tecnici, protocollo e architettura vedi [laragoci.md](laragoci.md)
-> **Data:** 2026-02-19 — **Ultimo aggiornamento:** 2026-03-15 (P1 SSL completato — Cloudflare Tunnel)
+> **Data:** 2026-02-19 — **Ultimo aggiornamento:** 2026-03-20 (analisi serial monitor, bug fix identificati, decisioni wake word)
 
-> **⏭ Prossimo step: Fase 2 — Audio pipeline (task 2.1 → 2.6)**
-> Piano dettagliato: `.claude/plans/iterative-stirring-yeti.md`
+> **⏭ Prossimo step: Fase 2 — fix bug B1-B4 poi audio pipeline (2.1 → 2.7)**
+> Piano dettagliato: [plans/02_Audio_pipeline.md](plans/02_Audio_pipeline.md)
 
 ---
 
@@ -44,15 +44,40 @@
 
 ## Fase 2: Audio pipeline
 
-| #   | Task                            | Dipende da | File/Posizione          | Dettaglio                                                                                                                                                                                                      |
-| --- | ------------------------------- | ---------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2.1 | **Opus decode**                 | 1.4        | `src/audio-pipeline.ts` | Decodifica frame Opus (16kHz mono 60ms) → PCM con `@discordjs/opus`. **Nota: il device fa già VAD** — manda listen:start/stop, non serve VAD server-side.                                                      |
-| 2.2 | ~~**VAD**~~                     | —          | —                       | **NON NECESSARIO** — il device manda `listen:stop` quando rileva silenzio. Rimosso dal piano.                                                                                                                  |
-| 2.3 | **STT (Whisper)**               | 2.1        | `src/audio-pipeline.ts` | Buffer Opus tra listen:start e listen:stop → Whisper API (language: "it") → testo. Trigger "ehi lara" → agente. No trigger → silent ack (tts:start+stop). Dialog mode: 30s window per follow-up senza trigger. |
-| 2.4 | **Integrazione agentCommand()** | 2.3        | `src/channel.ts`        | Chiama `agentCommand({ message: testo, sessionKey: "main", messageChannel: "xiaozhi" })`. Channel plugin già registrato ✅.                                                                                    |
-| 2.5 | **TTS → Opus encode**           | 2.4        | `src/audio-pipeline.ts` | Risposta agente → OpenAI TTS (pcm_24000, Nova) → PCM → Opus encode (24kHz mono 60ms). Rate control 60ms/frame.                                                                                                 |
-| 2.6 | **Rate controller**             | 2.5        | `src/audio-pipeline.ts` | Invio rate-controlled 60ms/frame. Messaggi `tts:start`, `tts:sentence_start`, `tts:stop`. Dopo tts:stop il device torna automaticamente in listen:start (dialog mode nativo firmware).                         |
-| 2.7 | **Emoji display**               | 2.4        | `src/bridge.ts`         | Invia `{"type":"llm","emotion":"happy"}` al device. L'agente decide l'emozione nel contesto della risposta.                                                                                                    |
+### Decisioni architetturali (2026-03-20)
+
+- **Attivazione durante sviluppo:** button fisico (toggle idle ↔ listening). Il bridge riceve `listen:start` + Opus identicamente al flow wake word — nessun impatto sulla pipeline.
+- **Wake word finale:** "goci goci" via WakeNet custom (training ~1000 sample TTS sintetici). Lavoro firmware indipendente, da fare dopo MVP. Quando arriva, il bridge aggiunge solo la gestione di `listen:detect` prima di `listen:start`.
+- **Trigger agente:** non serve una parola chiave software-side — il button sostituisce il trigger durante lo sviluppo.
+- **Protocol version:** il device usa v1 → frame Opus raw senza header 4 byte.
+
+### Bug da fixare prima della pipeline (trovati da serial monitor 2026-03-20)
+
+| #   | Bug                                                                  | File                 | Fix                          | Stato             |
+| --- | -------------------------------------------------------------------- | -------------------- | ---------------------------- | ----------------- |
+| B1  | `buildHello` manda `sample_rate: 16000` invece di 24000              | `src/protocol.ts:29` | 1 riga                       | **✅ 2026-03-21** |
+| B2  | `buildTts` usa campo `action` invece di `state`                      | `src/protocol.ts:47` | 1 riga                       | **✅ 2026-03-21** |
+| B3  | Connessione cade per NAT timeout router (~20s idle)                  | `src/bridge.ts`      | `ws.ping()` ogni 10s         | **✅ 2026-03-21** |
+| B4  | `parseMessage` tenta `JSON.parse` su frame Opus binari (protocol v1) | `src/protocol.ts:8`  | discrimina Buffer vs stringa | **✅ 2026-03-21** |
+
+### Tasks
+
+| #   | Task                            | Dipende da | File/Posizione          | Dettaglio                                                                                                                             |
+| --- | ------------------------------- | ---------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 2.2 | ~~**VAD**~~                     | —          | —                       | **NON NECESSARIO** — il device manda `listen:stop` quando rileva silenzio. Rimosso dal piano.                                         |
+| 2.1 | **Opus decode**                 | B4         | `src/audio-pipeline.ts` | Decodifica frame Opus raw (16kHz mono 60ms) → PCM con `@discordjs/opus`.                                                              |
+| 2.3 | **STT (Whisper)**               | 2.1        | `src/audio-pipeline.ts` | Buffer Opus tra listen:start e listen:stop → Whisper API (language: "it") → testo. No trigger → silent ack (tts:start+stop vuoto).    |
+| 2.4 | **Integrazione agentCommand()** | 2.3        | `src/channel.ts`        | Chiama `agentCommand({ message: testo, sessionKey: "main", messageChannel: "xiaozhi" })`. Channel plugin già registrato ✅.           |
+| 2.5 | **TTS → Opus encode**           | 2.4        | `src/audio-pipeline.ts` | Risposta agente → OpenAI TTS (pcm_24000, Nova) → PCM → Opus encode (24kHz mono 60ms).                                                 |
+| 2.6 | **Rate controller**             | 2.5        | `src/audio-pipeline.ts` | Invio rate-controlled 60ms/frame. Messaggi `tts:start`, `tts:sentence_start`, `tts:stop`. Dopo tts:stop device torna in listen:start. |
+| 2.7 | **Emoji display**               | 2.4        | `src/bridge.ts`         | Invia `{"type":"llm","emotion":"happy"}` al device.                                                                                   |
+
+### Wake word (post-MVP, indipendente dalla pipeline)
+
+| #   | Task                             | Dettaglio                                                             |
+| --- | -------------------------------- | --------------------------------------------------------------------- |
+| W1  | **Training "goci goci" WakeNet** | ~1000 sample TTS sintetici → Espressif training → modello `.bin`      |
+| W2  | **Flash + integrazione bridge**  | Flash modello + gestione `listen:detect` nel bridge (modifica minima) |
 
 ## Fase 3: Tool MCP agente
 
@@ -153,10 +178,24 @@ RIFERIMENTO (non modificare, solo studiare):
 
 ```json
 {
-  "@discordjs/opus": "^0.9.0",
-  "node-vad": "^1.1.3"
+  "@discordjs/opus": "^0.9.0"
 }
 ```
+
+> `node-vad` rimosso — VAD è hardware-side sul device.
+
+### Build nativo @discordjs/opus
+
+`@discordjs/opus` è un addon nativo C++ — non ha prebuilt per Node 22 su Linux x64.
+Dopo ogni `npm install` / `pnpm install` nella dir dell'estensione, compilarlo manualmente:
+
+```bash
+cd extensions/xiaozhi
+npm rebuild @discordjs/opus
+```
+
+Il binario viene messo in `node_modules/@discordjs/opus/prebuild/node-v127-napi-v3-linux-x64-glibc-2.39/opus.node`.
+Senza questo step il gateway crasha all'avvio con `Cannot find module ... opus.node`.
 
 ---
 

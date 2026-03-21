@@ -32,7 +32,7 @@ const xiaozhiPlugin = {
       }
       if (!runtimePromise) {
         runtimePromise = (async () => {
-          const bridge = new XiaozhiBridge();
+          const bridge = new XiaozhiBridge({ config: api.config, runtime: api.runtime });
           const rt: XiaozhuRuntime = {
             bridge,
             config,

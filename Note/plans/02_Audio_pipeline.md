@@ -1,0 +1,221 @@
+# Piano Fase 2 — Audio Pipeline
+
+> Creato: 2026-03-20 — Aggiornato: 2026-03-21 — Stato: bug B1-B4 risolti ✅ — pipeline 2.1→2.7 da implementare
+
+---
+
+## Decisioni architetturali
+
+| Decisione                    | Scelta                                  | Motivo                                                                   |
+| ---------------------------- | --------------------------------------- | ------------------------------------------------------------------------ |
+| Attivazione durante sviluppo | Button fisico (toggle idle ↔ listening) | Funziona già, pipeline identica al flow wake word                        |
+| Wake word finale             | "goci goci" via WakeNet custom          | 4 sil, 8 fonemi, unica nel parlato normale, ripetizione aiuta il modello |
+| Trigger agente               | Nessun filtro software-side             | Button sostituisce il trigger durante sviluppo                           |
+| Protocol version             | v1 — Opus raw senza header 4 byte       | Confermato dal serial monitor                                            |
+| VAD                          | Hardware sul device (WebRTC)            | Device manda listen:start/stop autonomamente, nessun VAD server-side     |
+
+---
+
+## Bug da fixare (trovati dal serial monitor 2026-03-20)
+
+### B1 — `sample_rate` errato nel hello server ✅ RISOLTO 2026-03-21
+
+**File:** `extensions/xiaozhi/src/protocol.ts:29`
+**Sintomo:** `W Application: Server sample rate 16000 does not match device output sample rate 24000`
+**Fix:** `sample_rate: 16000` → `sample_rate: 24000` in `buildHello`
+**Verifica:** serial monitor non mostra più il warning dopo il fix
+
+### B2 — `buildTts` usa `action` invece di `state` ✅ RISOLTO 2026-03-21
+
+**File:** `extensions/xiaozhi/src/protocol.ts:47`
+**Fix:** rinominare il campo `action` → `state`
+
+```ts
+// prima:  { type: "tts", action: "start" }
+// dopo:   { type: "tts", state: "start" }
+```
+
+### B3 — Connessione cade per timeout idle ✅ RISOLTO 2026-03-21
+
+**File:** `extensions/xiaozhi/src/bridge.ts`
+**Sintomo:** `E EspSsl: SSL receive failed: -76` → `WS: Websocket disconnected` — WS close code **1006**
+**Causa reale (da diagnostica):** non è Cloudflare timeout a 100s — è il **NAT del router home (Fritz!Box)**
+che azzera la mappatura TCP per connessioni idle. Timeout osservato: ~20s senza keepalive.
+**Fix:** `setInterval(() => ws.ping(), 10_000)` in `handleConnection`, clear su `close`/`error`.
+Intervallo ridotto a 10s dopo test (30s non bastava, connessione cadeva a 21s prima del primo ping).
+**Verifica:** con keepalive 10s la connessione regge oltre 40s idle. Il disconnect a 40s quando si preme
+il bottone è atteso (Phase 1 stub — il bridge non risponde con STT/TTS → device timeout).
+**Note aggiuntive:**
+
+- Aggiunto `console.log` su connect/disconnect con session ID, device MAC, WS close code
+- `cloudflared` (PID 36774, running dal Mar15) è stabile — non causa i disconnect
+
+### B4 — `parseMessage` crasha su frame Opus binari ✅ RISOLTO 2026-03-21
+
+**File:** `extensions/xiaozhi/src/protocol.ts:8`
+**Causa:** Protocol v1 manda frame Opus raw (Buffer binario), il parser tenta `JSON.parse` → eccezione
+**Fix:** discriminare tipo frame prima del parse:
+
+```ts
+// se Buffer e non inizia con '{' → frame Opus binario, non JSON
+if (Buffer.isBuffer(data) && data[0] !== 0x7b) return { type: "audio", payload: data };
+```
+
+---
+
+## Flusso completo messaggi
+
+```
+DEVICE                          BRIDGE (bridge.ts)              PIPELINE (audio-pipeline.ts)    AGENTE
+  |                                  |                                  |                          |
+  |-- hello ----------------------->|                                  |                          |
+  |<-- hello (session_id) ----------|                                  |                          |
+  |                                  |                                  |                          |
+  |  [utente preme button]           |                                  |                          |
+  |-- listen:start ----------------->| pipeline.onListenStart()         |                          |
+  |-- [Opus frame 60ms] ------------>|                                  |<-- buffer.push(frame)    |
+  |-- [Opus frame 60ms] ------------>|                                  |<-- buffer.push(frame)    |
+  |-- [Opus frame 60ms] ------------>|                                  |<-- buffer.push(frame)    |
+  |  [VAD rileva silenzio]           |                                  |                          |
+  |-- listen:stop ------------------>| pipeline.onListenStop()          |                          |
+  |                                  |                                  |-- Opus[] → PCM → Whisper |
+  |                                  |                                  |<-- testo: "dimmi l'ora"  |
+  |<-- stt:"dimmi l'ora" -----------|                                  |                          |
+  |                                  |                                  |-- agentCommand() ------->|
+  |                                  |                                  |                          |-- (Claude processa)
+  |                                  |                                  |<-- risposta testo -------|
+  |<-- llm:emotion:"happy" ---------|                                  |                          |
+  |<-- tts:start -------------------|                                  |                          |
+  |<-- tts:sentence_start ----------|                                  |-- TTS → PCM → Opus       |
+  |<-- [Opus frame 60ms] -----------|                                  |                          |
+  |<-- [Opus frame 60ms] -----------|                                  |                          |
+  |<-- tts:stop --------------------|                                  |                          |
+  |                                  |                                  |                          |
+  |  [device torna in listen:start automaticamente — dialog mode]      |                          |
+  |-- listen:start ----------------->| (loop ricomincia)               |                          |
+```
+
+---
+
+## State machine per sessione device
+
+Ogni `DeviceSession` in `bridge.ts` ha il proprio `AudioPipeline`. Stati:
+
+```
+IDLE
+  ↓ listen:start
+LISTENING  (accumula frame Opus nel buffer)
+  ↓ listen:stop
+PROCESSING  (Whisper → agentCommand → TTS → Opus encode)
+  ↓ tts:start inviato
+SPEAKING  (invia frame Opus rate-controlled al device)
+  ↓ tts:stop inviato
+IDLE  (dialog mode: device manda subito listen:start → LISTENING)
+```
+
+**Abort:** messaggio `{"type":"abort"}` dal device in qualsiasi stato → interrompi TTS in corso → svuota buffer → torna IDLE.
+
+```
+SPEAKING → [abort ricevuto] → stop invio frame → tts:stop → IDLE
+PROCESSING → [abort ricevuto] → cancella richiesta agente → IDLE
+```
+
+---
+
+## Integrazione bridge.ts ↔ audio-pipeline.ts
+
+`bridge.ts` crea un `AudioPipeline` per ogni connessione device e smista i messaggi:
+
+```ts
+// in handleConnection():
+const pipeline = new AudioPipeline(ws, deps); // deps: openai, agentCommand
+
+ws.on("message", (data) => {
+  if (isBinaryFrame(data)) {
+    pipeline.onAudioFrame(data); // frame Opus → buffer
+    return;
+  }
+  const msg = parseMessage(data);
+  switch (msg.type) {
+    case "listen":
+      if (msg.state === "start") pipeline.onListenStart();
+      if (msg.state === "stop") pipeline.onListenStop();
+      break;
+    case "abort":
+      pipeline.onAbort();
+      break;
+  }
+});
+
+ws.on("close", () => pipeline.destroy());
+```
+
+---
+
+## Tasks pipeline (in ordine)
+
+| #     | Task                  | Dipende da | File                               | Dettaglio                                                                                                                                                           |
+| ----- | --------------------- | ---------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| B1-B4 | ~~**Fix bug**~~       | —          | `src/protocol.ts`, `src/bridge.ts` | **COMPLETATO** ✅ 2026-03-21                                                                                                                                        |
+| 2.1   | **Opus decode**       | B4         | `src/audio-pipeline.ts`            | Frame Opus raw (16kHz mono 60ms) → PCM con `@discordjs/opus`                                                                                                        |
+| 2.3   | **STT Whisper**       | 2.1        | `src/audio-pipeline.ts`            | Buffer Opus tra listen:start → listen:stop → Whisper API (`language: "it"`) → testo. No risposta → silent ack (`tts:start` + `tts:stop` vuoto)                      |
+| 2.4   | **agentCommand()**    | 2.3        | `src/channel.ts`                   | `agentCommand({ message: testo, sessionKey: "main", messageChannel: "xiaozhi" })`                                                                                   |
+| 2.5   | **TTS → Opus encode** | 2.4        | `src/audio-pipeline.ts`            | Risposta agente → OpenAI TTS (`pcm_24000`, voce Nova) → PCM → Opus encode (24kHz mono 60ms, 24kbps, complexity 10)                                                  |
+| 2.6   | **Rate controller**   | 2.5        | `src/audio-pipeline.ts`            | Invio rate-controlled 60ms/frame. Sequenza: `tts:start` → `tts:sentence_start` → frame Opus → `tts:stop`. Dopo stop il device torna in listen:start automaticamente |
+| 2.7   | **Emoji display**     | 2.4        | `src/bridge.ts`                    | Invia `{"type":"llm","emotion":"happy"}` al device prima del TTS                                                                                                    |
+
+---
+
+## Wake word "goci goci" — post-MVP (indipendente dalla pipeline)
+
+### Perché "goci goci"
+
+- 4 sillabe, 8 fonemi → supera la soglia minima raccomandata (3 sil, 6 fonemi)
+- Ripetizione: pattern che i modelli wake word riconoscono meglio (stessa logica di "Ok Google")
+- Non compare mai nel parlato normale italiano → falsi positivi minimi
+- Pronuncia italiana nativa → nessun problema di accento
+
+### Come fare il training WakeNet custom
+
+**Documentazione ufficiale:** https://docs.espressif.com/projects/esp-sr/en/latest/esp32s3/wake_word_engine/ESP_Wake_Words_Customization.html
+
+**Step:**
+
+1. **Genera ~1000 campioni TTS sintetici di "goci goci"**
+   - Usa Python + qualsiasi TTS (ElevenLabs, Azure, Google TTS, Piper)
+   - Varia: voce, velocità, tono, volume, leggero rumore di fondo
+   - Formato richiesto: WAV, 16kHz, mono, 16-bit signed
+
+2. **Segui il processo di customizzazione Espressif**
+   - Espressif fornisce uno strumento di training (o un servizio cloud)
+   - Input: campioni audio + nome della wake word
+   - Output: file modello `.bin` da flashare nella partizione dedicata
+
+3. **Integra nel firmware XiaoZhi**
+   - Copia il `.bin` nella partizione `model` del firmware
+   - Riabilita WakeNet nel menuconfig (`CONFIG_USE_WAKENET=y`)
+   - AFE Pipeline diventa: `[input] -> |WakeNet| -> |VAD| -> [output]`
+   - Il device manda `{"type":"listen","state":"detect","text":"goci goci"}` quando rileva la wake word
+
+4. **Aggiorna il bridge (modifica minima)**
+   - Aggiungere gestione `listen:detect` in `bridge.ts`
+   - Al `detect` → avvia la sessione STT (già pronta dalla pipeline)
+   - Nessuna modifica strutturale alla pipeline
+
+### Dipendenza npm da aggiungere
+
+```json
+{
+  "@discordjs/opus": "^0.9.0"
+}
+```
+
+---
+
+## Parametri audio di riferimento
+
+```
+Upload   (device → server): Opus, 16kHz, mono, 60ms/frame, protocol v1 (raw, no header)
+Download (server → device): Opus, 24kHz, mono, 60ms/frame, 24kbps, complexity 10
+VAD:     hardware WebRTC sul device — nessun VAD server-side necessario
+```

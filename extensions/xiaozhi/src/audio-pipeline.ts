@@ -65,6 +65,7 @@ export class AudioPipeline {
 
   /** Device pressed button: start buffering audio. */
   onListenStart(): void {
+    console.log(`[XZ listen] start — state era: ${this.state}`);
     if (this.state !== "idle") return;
     this.generation++;
     this.state = "listening";
@@ -73,6 +74,8 @@ export class AudioPipeline {
 
   /** Device released button (VAD stop): run the pipeline. */
   onListenStop(): void {
+    const totalBytes = this.opusFrames.reduce((s, f) => s + f.length, 0);
+    console.log(`[XZ listen] stop — ${this.opusFrames.length} frames (${totalBytes} bytes)`);
     if (this.state !== "listening") return;
     this.state = "processing";
     const frames = this.opusFrames;
@@ -104,26 +107,49 @@ export class AudioPipeline {
     try {
       // 2.1 — Opus → PCM (16kHz mono)
       const pcmChunks: Buffer[] = [];
+      let decodeErrors = 0;
       for (const frame of frames) {
         try {
           pcmChunks.push(this.decoder.decode(frame));
-        } catch {
-          // corrupted frame — skip
+        } catch (err) {
+          decodeErrors++;
+          console.error("[XZ 2.1] Opus decode frame error:", err);
         }
       }
       const pcm16k = Buffer.concat(pcmChunks);
+      console.log(
+        `[XZ 2.1] Opus decode: ${frames.length} frames → ${pcm16k.length} bytes PCM` +
+          (decodeErrors ? ` (${decodeErrors} errors)` : ""),
+      );
 
       if (gen !== this.generation) return;
 
       // 2.3 — Whisper STT
       const apiKey = process.env.OPENAI_API_KEY;
-      if (!apiKey || pcm16k.length === 0) {
+      if (!apiKey) {
+        console.warn("[XZ 2.3] Whisper: OPENAI_API_KEY not set — silent ack");
+        this.silentAck();
+        return;
+      }
+      if (pcm16k.length === 0) {
+        console.warn("[XZ 2.3] Whisper: 0 bytes PCM — silent ack");
         this.silentAck();
         return;
       }
 
       const wav = buildWav(pcm16k, UPLOAD_RATE, 1);
-      const text = await whisperTranscribe(wav, apiKey);
+      console.log(`[XZ 2.3] Whisper: invio ${wav.length} bytes WAV...`);
+      let text: string | null;
+      try {
+        text = await whisperTranscribe(wav, apiKey);
+      } catch (err) {
+        console.error("[XZ 2.3] Whisper: ERROR:", err);
+        this.silentAck();
+        return;
+      }
+      console.log(
+        text?.trim() ? `[XZ 2.3] Whisper: "${text}"` : `[XZ 2.3] Whisper: null — silenzio`,
+      );
 
       if (gen !== this.generation) return;
 
@@ -136,7 +162,13 @@ export class AudioPipeline {
       this.sendJson(buildStt(text));
 
       // 2.4 — Agent command
+      console.log(`[XZ 2.4] Agent: input="${text}"`);
       const response = await this.runAgent(text);
+      console.log(
+        response?.trim()
+          ? `[XZ 2.4] Agent: risposta="${response}" (${response.length} chars)`
+          : `[XZ 2.4] Agent: null`,
+      );
 
       if (gen !== this.generation) return;
 
@@ -169,21 +201,32 @@ export class AudioPipeline {
     if (gen !== this.generation) return;
 
     // 2.5 — TTS → PCM via core runtime
-    const result = await this.deps.runtime.tts.textToSpeechTelephony({
-      text,
-      cfg: this.deps.config,
-    });
+    console.log(`[XZ 2.5] TTS: richiedo audio...`);
+    let result: Awaited<ReturnType<typeof this.deps.runtime.tts.textToSpeechTelephony>>;
+    try {
+      result = await this.deps.runtime.tts.textToSpeechTelephony({
+        text,
+        cfg: this.deps.config,
+      });
+    } catch (err) {
+      console.error("[XZ 2.5] TTS: ERROR (exception):", err);
+      this.silentAck();
+      return;
+    }
 
     if (gen !== this.generation) return;
 
     if (!result.success || !result.audioBuffer || !result.sampleRate) {
-      console.error("[xiaozhi] TTS failed:", result.error);
+      console.error("[XZ 2.5] TTS: ERROR (failed):", result.error);
       this.silentAck();
       return;
     }
 
     // Resample to 24kHz if TTS provider returned a different rate
     const pcm24k = resamplePcm(result.audioBuffer, result.sampleRate, DOWNLOAD_RATE);
+    console.log(
+      `[XZ 2.5] TTS: ${result.audioBuffer.length} bytes raw → ${pcm24k.length} bytes PCM 24kHz`,
+    );
 
     // Encode PCM → Opus frames (60ms each)
     const opusFrames: Buffer[] = [];
@@ -196,10 +239,11 @@ export class AudioPipeline {
           : chunk;
       try {
         opusFrames.push(this.encoder.encode(padded));
-      } catch {
-        // skip bad frame
+      } catch (err) {
+        console.error("[XZ 2.5] Opus encode frame error:", err);
       }
     }
+    console.log(`[XZ 2.5] Opus encode: ${opusFrames.length} frames`);
 
     if (gen !== this.generation || opusFrames.length === 0) {
       if (gen === this.generation) this.silentAck();
@@ -211,9 +255,11 @@ export class AudioPipeline {
     this.sendJson(buildTts("start"));
     this.sendJson(buildTts("sentence_start", text));
 
+    console.log(`[XZ 2.6] Rate-ctrl: invio ${opusFrames.length} frames a ${FRAME_MS}ms/frame`);
     await this.sendFramesRateControlled(opusFrames, gen);
 
     if (gen === this.generation) {
+      console.log(`[XZ 2.6] Rate-ctrl: DONE`);
       this.sendJson(buildTts("stop"));
       this.state = "idle";
       // device will automatically send listen:start (dialog mode)

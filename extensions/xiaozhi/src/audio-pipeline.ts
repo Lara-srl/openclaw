@@ -49,6 +49,8 @@ export class AudioPipeline {
   constructor(
     private ws: WebSocket,
     private deps: AudioPipelineDeps,
+    /** B9: called with encoded TTS frames when WS is closed during speak(). */
+    private onTtsReady?: (frames: Buffer[]) => void,
   ) {
     this.decoder = new OpusEncoder(UPLOAD_RATE, 1);
     this.encoder = new OpusEncoder(DOWNLOAD_RATE, 1);
@@ -92,6 +94,25 @@ export class AudioPipeline {
     }
     this.state = "idle";
     this.opusFrames = [];
+  }
+
+  /**
+   * B9: inject pending TTS from a previous B8 session into this (new) WS.
+   * Called by bridge right after hello when device reconnects with same deviceId.
+   * Blocks listen:start via state guard until playback completes.
+   */
+  async injectTts(frames: Buffer[]): Promise<void> {
+    if (this.state !== "idle" || frames.length === 0) return;
+    const gen = this.generation;
+    this.state = "speaking";
+    console.log(`[XZ B9] injecting pending TTS (${frames.length} frames) into new session`);
+    this.sendJson(buildTts("start"));
+    await this.sendFramesRateControlled(frames, gen);
+    if (gen === this.generation) {
+      this.sendJson(buildTts("stop"));
+      this.state = "idle";
+      console.log(`[XZ B9] pending TTS playback complete`);
+    }
   }
 
   /**
@@ -259,6 +280,14 @@ export class AudioPipeline {
 
     if (gen !== this.generation || opusFrames.length === 0) {
       if (gen === this.generation) this.silentAck();
+      return;
+    }
+
+    // B9: WS already closed (B8 disconnect) — hand frames to bridge for next reconnect
+    if (this.ws.readyState !== this.ws.OPEN) {
+      console.log(`[XZ B9] WS closed — queuing ${opusFrames.length} TTS frames for next reconnect`);
+      this.onTtsReady?.(opusFrames);
+      this.state = "idle";
       return;
     }
 

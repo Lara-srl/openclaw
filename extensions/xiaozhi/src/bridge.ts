@@ -9,6 +9,8 @@ import type { BridgeDeps, DeviceSession } from "./types.js";
 export class XiaozhiBridge {
   private sessions = new Map<string, DeviceSession>();
   private wss: WebSocketServer;
+  /** B9: pending TTS frames keyed by deviceId — sent on next reconnect. */
+  private pendingTts = new Map<string, Buffer[]>();
 
   constructor(private deps: BridgeDeps) {
     this.wss = new WebSocketServer({ noServer: true });
@@ -49,8 +51,25 @@ export class XiaozhiBridge {
     // Handshake: send hello frame
     ws.send(buildHello(sessionId));
 
+    // B9: inject pending TTS from previous B8 session before new listen cycle
+    const pending = deviceId ? this.pendingTts.get(deviceId) : undefined;
+    if (pending) {
+      this.pendingTts.delete(deviceId!);
+    }
+
     // One AudioPipeline per device session
-    const pipeline = new AudioPipeline(ws, this.deps);
+    const pipeline = new AudioPipeline(ws, this.deps, (frames) => {
+      // B9: WS closed during speak() — store for next reconnect
+      if (deviceId) {
+        this.pendingTts.set(deviceId, frames);
+        console.log(`[XZ bridge] B9: stored ${frames.length} TTS frames for device=${deviceId}`);
+      }
+    });
+
+    // B9: send pending TTS from previous session (blocks listen:start via state guard)
+    if (pending) {
+      void pipeline.injectTts(pending);
+    }
 
     let audioFrameCount = 0;
     ws.on("message", (data) => {

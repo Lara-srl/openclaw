@@ -1,6 +1,6 @@
 # Piano Fase 2 — Audio Pipeline
 
-> Creato: 2026-03-20 — Aggiornato: 2026-03-21 — Stato: B1-B4 risolti ✅, pipeline 2.1→2.7 implementata ✅, B5 Cloudflare risolto ✅ — da testare: premere bottone → round-trip audio
+> Creato: 2026-03-20 — Aggiornato: 2026-03-24 — Stato: B1-B9 risolti ✅, pipeline 2.1→2.7 funzionante ✅, audio round-trip VERIFICATO ✅
 
 ---
 
@@ -76,7 +76,7 @@ Il firmware XiaoZhi ignora message types sconosciuti (logga `Unknown message typ
 **File:** `extensions/xiaozhi/src/bridge.ts` — `setInterval` con `ws.send(JSON.stringify({type:"ping"}))` ogni 10s.
 **Nota:** B5 parzialmente risolto → vedi B6.
 
-### B6 — Fritz!Box NAT timeout ~9.2s, keepalive 10s troppo lento 🔄 IN CORSO 2026-03-21
+### B6 — Fritz!Box NAT timeout ~9.2s, keepalive 10s troppo lento ✅ RISOLTO 2026-03-21
 
 **File:** `extensions/xiaozhi/src/bridge.ts`
 **Sintomo:** dopo il fix B5 (data frame ogni 10s), connessione cade ancora a ~19-20s.
@@ -110,38 +110,64 @@ Questo garantisce: data flow per Cloudflare (data frame) + PONG bidirezionale pe
 if (Buffer.isBuffer(data) && data[0] !== 0x7b) return { type: "audio", payload: data };
 ```
 
+### B7 — ws.ping() causa SSL reset sul device ✅ RISOLTO 2026-03-21
+
+**File:** `extensions/xiaozhi/src/bridge.ts`
+**Sintomo:** `MBEDTLS_ERR_NET_RECV_FAILED` ~4.8s dopo il primo ping → disconnect durante ascolto attivo.
+**Fix:** rimosso `ws.ping()`. Durante ascolto, i frame Opus del device (~60ms/frame) garantiscono traffico bidirezionale sufficiente per Fritz!Box NAT. In idle, il JSON data frame `{"type":"ping"}` ogni 8s è sufficiente per Cloudflare.
+
+### B8 — Device disconnette (1006) invece di mandare listen:stop ✅ RISOLTO 2026-03-24
+
+**File:** `extensions/xiaozhi/src/audio-pipeline.ts`, `extensions/xiaozhi/src/bridge.ts`
+**Sintomo:** il secondo click del bottone causa disconnect 1006 invece di listen:stop → pipeline mai triggerata.
+**Causa:** il device manda listen:stop + chiude TCP in rapida successione. Con 1006 (TCP RST) il frame listen:stop viene scartato prima di essere processato — race condition.
+**Fix:** `flushOnDisconnect()` in `AudioPipeline` — se `state === "listening"` con frame bufferizzati al momento del close, triggera `onListenStop()` implicito. STT + agent girano, TTS silently no-op (WS chiusa).
+**Flusso reale device:**
+
+- Click 1 → `listen:start` + streaming audio (60ms/frame)
+- Click 2 → 1006 disconnect (listen:stop perso nel TCP RST)
+- B8 salva la pipeline
+
+### B9 — TTS perso su WS già chiusa (B8 case) ✅ RISOLTO 2026-03-24
+
+**File:** `extensions/xiaozhi/src/audio-pipeline.ts`, `extensions/xiaozhi/src/bridge.ts`
+**Sintomo:** dopo B8, STT e agent funzionano ma i frame TTS vengono inviati su WS chiusa → silently no-op → device non sente risposta.
+**Fix:**
+
+1. In `speak()`: se `ws.readyState !== OPEN` dopo encode, chiama callback `onTtsReady(frames)` invece di inviare.
+2. In `bridge.ts`: `pendingTts = Map<deviceId, Buffer[]>` — salva i frame.
+3. Su reconnect dello stesso device: `injectTts(frames)` invia i frame pending sulla nuova WS (state → speaking → blocca listen:start via guard → tts:stop → idle).
+   **Risultato:** il device sente la risposta al prossimo reconnect, poi può fare la domanda successiva.
+
 ---
 
-## Flusso completo messaggi
+## Flusso completo messaggi (stato attuale 2026-03-24)
 
 ```
-DEVICE                          BRIDGE (bridge.ts)              PIPELINE (audio-pipeline.ts)    AGENTE
-  |                                  |                                  |                          |
-  |-- hello ----------------------->|                                  |                          |
-  |<-- hello (session_id) ----------|                                  |                          |
-  |                                  |                                  |                          |
-  |  [utente preme button]           |                                  |                          |
-  |-- listen:start ----------------->| pipeline.onListenStart()         |                          |
-  |-- [Opus frame 60ms] ------------>|                                  |<-- buffer.push(frame)    |
-  |-- [Opus frame 60ms] ------------>|                                  |<-- buffer.push(frame)    |
-  |-- [Opus frame 60ms] ------------>|                                  |<-- buffer.push(frame)    |
-  |  [VAD rileva silenzio]           |                                  |                          |
-  |-- listen:stop ------------------>| pipeline.onListenStop()          |                          |
-  |                                  |                                  |-- Opus[] → PCM → Whisper |
-  |                                  |                                  |<-- testo: "dimmi l'ora"  |
-  |<-- stt:"dimmi l'ora" -----------|                                  |                          |
-  |                                  |                                  |-- agentCommand() ------->|
-  |                                  |                                  |                          |-- (Claude processa)
-  |                                  |                                  |<-- risposta testo -------|
-  |<-- llm:emotion:"happy" ---------|                                  |                          |
-  |<-- tts:start -------------------|                                  |                          |
-  |<-- tts:sentence_start ----------|                                  |-- TTS → PCM → Opus       |
-  |<-- [Opus frame 60ms] -----------|                                  |                          |
-  |<-- [Opus frame 60ms] -----------|                                  |                          |
-  |<-- tts:stop --------------------|                                  |                          |
-  |                                  |                                  |                          |
-  |  [device torna in listen:start automaticamente — dialog mode]      |                          |
-  |-- listen:start ----------------->| (loop ricomincia)               |                          |
+SESSIONE N (click 1 + click 2 = disconnect B8)
+  Device                          Bridge                          Pipeline / Agent
+    |-- connect ------------------>|                                  |
+    |<-- hello (session_id) -------|  B9: check pendingTts[deviceId]  |
+    |                              |  → injectTts se presente         |
+    |-- hello (device) ----------->|  (ignorato)                      |
+    |-- listen:start ------------->|  onListenStart() state→listening |
+    |-- [Opus ×N] --------------->|                                  |<-- buffer
+    |  [click 2]                   |                                  |
+    |-- 1006 disconnect ---------->|  B8: flushOnDisconnect()         |
+    |                              |      → onListenStop() implicito  |
+    |                              |                                  |-- Opus→PCM→Whisper→Agent→TTS encode
+    |                              |                                  |   ws chiusa → onTtsReady(frames)
+    |                              |  pendingTts.set(deviceId,frames) |
+
+SESSIONE N+1 (reconnect)
+    |-- connect ------------------>|                                  |
+    |<-- hello (session_id) -------|                                  |
+    |<-- tts:start ----------------|  B9: injectTts(pending frames)   |-- state→speaking
+    |<-- [Opus ×M] ---------------|                                  |   rate-ctrl 60ms/frame
+    |<-- tts:stop -----------------|                                  |-- state→idle
+    |-- hello (device) ----------->|  (ignorato)                      |
+    |-- listen:start ------------->|  onListenStart() (idle→ok)       |
+    |-- [Opus ×K] --------------->|  ...prossima domanda...          |
 ```
 
 ---
@@ -196,7 +222,7 @@ ws.on("message", (data) => {
   }
 });
 
-ws.on("close", () => pipeline.destroy());
+ws.on("close", () => pipeline.flushOnDisconnect()); // B8
 ```
 
 ---

@@ -65,13 +65,20 @@ export class AudioPipeline {
     }
   }
 
-  /** Device pressed button: start buffering audio. */
+  /** Device pressed button: start buffering audio. Interrupts any active state. */
   onListenStart(): void {
-    console.log(`[XZ listen] start — state era: ${this.state}`);
-    if (this.state !== "idle") return;
+    const prev = this.state;
+    // Interrupt: if speaking, tell device to stop playback immediately
+    if (prev === "speaking") {
+      this.sendJson(buildTts("stop"));
+    }
+    // generation++ cancels any in-flight process() / sendFramesRateControlled()
     this.generation++;
+    this.clearSpeakingTimer();
     this.state = "listening";
     this.opusFrames = [];
+    const tag = prev === "idle" ? "start" : `interrupt (era: ${prev})`;
+    console.log(`[XZ listen] ${tag}`);
   }
 
   /** Device released button (VAD stop): run the pipeline. */

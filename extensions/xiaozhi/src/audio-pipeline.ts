@@ -43,6 +43,8 @@ export class AudioPipeline {
   /** Incremented on every abort/listen-start to invalidate in-flight process(). */
   private generation = 0;
   private speakingTimer: ReturnType<typeof setTimeout> | null = null;
+  /** True while injectTts() runs — device sends listen:start automatically on connect; ignore it. */
+  private isInjectingB9 = false;
   private decoder: OpusEncoder;
   private encoder: OpusEncoder;
 
@@ -67,6 +69,8 @@ export class AudioPipeline {
 
   /** Device pressed button: start buffering audio. Interrupts any active state. */
   onListenStart(): void {
+    // Device sends listen:start automatically on connect (not a real button press) — let B9 finish.
+    if (this.isInjectingB9) return;
     const prev = this.state;
     // Interrupt: if speaking, tell device to stop playback immediately
     if (prev === "speaking") {
@@ -94,6 +98,7 @@ export class AudioPipeline {
 
   /** Abort from device in any state: cancel everything, go idle. */
   onAbort(): void {
+    this.isInjectingB9 = false; // allow listen:start after abort, even if B9 was running
     this.generation++;
     this.clearSpeakingTimer();
     if (this.state === "speaking") {
@@ -112,9 +117,11 @@ export class AudioPipeline {
     if (this.state !== "idle" || frames.length === 0) return;
     const gen = this.generation;
     this.state = "speaking";
+    this.isInjectingB9 = true;
     console.log(`[XZ B9] injecting pending TTS (${frames.length} frames) into new session`);
     this.sendJson(buildTts("start"));
     await this.sendFramesRateControlled(frames, gen);
+    this.isInjectingB9 = false; // always clear after await (even if interrupted)
     if (gen === this.generation) {
       this.sendJson(buildTts("stop"));
       this.state = "idle";

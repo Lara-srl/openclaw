@@ -52,41 +52,58 @@ export class XiaozhiBridge {
     // One AudioPipeline per device session
     const pipeline = new AudioPipeline(ws, this.deps);
 
+    let audioFrameCount = 0;
     ws.on("message", (data) => {
       try {
         const msg = parseMessage(data as Buffer | string);
         switch (msg.type) {
           case "audio":
             // Raw Opus frame from device mic
+            audioFrameCount++;
+            if (audioFrameCount === 1 || audioFrameCount % 50 === 0) {
+              console.log(
+                `[XZ bridge] audio frame #${audioFrameCount} (${(data as Buffer).length}b)`,
+              );
+            }
             if (msg.payload) pipeline.onAudioFrame(msg.payload);
             break;
           case "listen":
+            console.log(`[XZ bridge] listen state=${msg.state}`);
             if (msg.state === "start") pipeline.onListenStart();
             if (msg.state === "stop") pipeline.onListenStop();
             break;
           case "abort":
+            console.log(`[XZ bridge] abort`);
             pipeline.onAbort();
             break;
+          default:
+            console.log(`[XZ bridge] unknown type=${msg.type}`);
         }
-      } catch {
-        // Malformed frame — ignore silently
+      } catch (err) {
+        const raw = Buffer.isBuffer(data)
+          ? `binary[${(data as Buffer).length}b] 0x${(data as Buffer)[0]?.toString(16)}`
+          : String(data).substring(0, 120);
+        console.error(`[XZ bridge] parse error — raw: ${raw} — err: ${String(err)}`);
       }
     });
 
-    // B3/B5/B6: keepalive every 8s.
+    // B3/B5/B6/B7: keepalive every 8s.
     // - Data frame (ws.send) keeps Cloudflare Tunnel alive (control frames don't count).
-    // - Control frame (ws.ping) triggers device PONG → bidirectional TCP traffic → Fritz!Box NAT reset.
-    // Fritz!Box NAT timeout ≈ 9.2s; 8s interval ensures we beat it in both directions.
+    // - ws.ping() removed (B7): during active listen the device streams audio frames every ~60ms,
+    //   providing sufficient bidirectional traffic for Fritz!Box NAT (9.2s timeout).
+    //   In idle, the JSON ping data frame alone is enough for Cloudflare.
+    //   ws.ping() was suspected to cause SSL reset (MBEDTLS_ERR_NET_RECV_FAILED ~4.8s after first ping).
     const keepalive = setInterval(() => {
       if (ws.readyState === ws.OPEN) {
         ws.send(JSON.stringify({ type: "ping" })); // data frame for Cloudflare
-        ws.ping(); // control frame for NAT bidirectional keepalive
       }
     }, 8_000);
 
     ws.on("close", (code, reason) => {
       clearInterval(keepalive);
-      pipeline.destroy();
+      // B8: implicit listen:stop on abnormal close (device disconnects instead
+      // of sending listen:stop — listen:stop is lost in the TCP RST race).
+      pipeline.flushOnDisconnect();
       this.sessions.delete(sessionId);
       console.log(
         `[xiaozhi] disconnected session=${sessionId} code=${code} reason=${reason.toString()}`,
@@ -95,7 +112,7 @@ export class XiaozhiBridge {
 
     ws.on("error", (err) => {
       clearInterval(keepalive);
-      pipeline.destroy();
+      pipeline.flushOnDisconnect();
       this.sessions.delete(sessionId);
       console.error(`[xiaozhi] ws error session=${sessionId}`, err);
     });

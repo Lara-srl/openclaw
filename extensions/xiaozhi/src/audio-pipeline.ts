@@ -94,11 +94,23 @@ export class AudioPipeline {
     this.opusFrames = [];
   }
 
-  /** Called on WS close — release resources. */
-  destroy(): void {
-    this.generation++;
-    this.clearSpeakingTimer();
-    this.state = "idle";
+  /**
+   * B8: called on WS close — if we were listening, trigger implicit stop so
+   * STT+agent still run (TTS will silently fail on closed WS, but session
+   * history is updated for next reconnect).
+   */
+  flushOnDisconnect(): void {
+    if (this.state === "listening" && this.opusFrames.length > 0) {
+      const n = this.opusFrames.length;
+      console.log(`[XZ B8] disconnect during listen — implicit stop (${n} frames buffered)`);
+      // onListenStop transitions state and fires process(); TTS sends will
+      // silently no-op because ws.readyState !== OPEN.
+      this.onListenStop();
+    } else {
+      this.generation++;
+      this.clearSpeakingTimer();
+      this.state = "idle";
+    }
   }
 
   // ─── Internal pipeline ──────────────────────────────────────────────────────
@@ -400,7 +412,7 @@ async function whisperTranscribe(wav: Buffer, apiKey: string): Promise<string | 
   const form = new FormData();
   form.append("file", new Blob([wav], { type: "audio/wav" }), "audio.wav");
   form.append("model", "whisper-1");
-  form.append("language", "it");
+  // No language lock — let Whisper auto-detect (supports multilingual use)
 
   let res: Response;
   try {

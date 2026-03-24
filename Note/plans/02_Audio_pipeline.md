@@ -1,6 +1,6 @@
 # Piano Fase 2 — Audio Pipeline
 
-> Creato: 2026-03-20 — Aggiornato: 2026-03-24 — Stato: B1-B9 risolti ✅, pipeline 2.1→2.7 funzionante ✅, audio round-trip VERIFICATO ✅
+> Creato: 2026-03-20 — Aggiornato: 2026-03-25 — Stato: B1-B10 risolti ✅, pipeline 2.1→2.7 funzionante ✅, interrupt mid-session IMPLEMENTATO ✅
 
 ---
 
@@ -139,9 +139,46 @@ if (Buffer.isBuffer(data) && data[0] !== 0x7b) return { type: "audio", payload: 
 3. Su reconnect dello stesso device: `injectTts(frames)` invia i frame pending sulla nuova WS (state → speaking → blocca listen:start via guard → tts:stop → idle).
    **Risultato:** il device sente la risposta al prossimo reconnect, poi può fare la domanda successiva.
 
+### B10 — `onListenStart` bloccato da guard: no interrupt mid-session ✅ RISOLTO 2026-03-25
+
+**File:** `extensions/xiaozhi/src/audio-pipeline.ts`
+**Sintomo:** premendo il bottone durante processing o speaking, il device ignora il press (vecchia guard `if (state !== "idle") return`). Nessuna possibilità di interrompere.
+**Fix parte 1 — interrupt universale:** rimossa la guard. `onListenStart()` ora funziona in qualsiasi stato:
+
+- se `state === "speaking"`: manda `tts:stop` al device prima di transitare
+- `generation++` cancella qualsiasi `process()` / `sendFramesRateControlled()` in volo
+- `clearSpeakingTimer()` ferma il timer del rate controller
+- log: `[XZ listen] interrupt (era: processing)` oppure `[XZ listen] interrupt (era: speaking)`
+
+**Problema secondario scoperto in test:** il device manda `listen:start` **automaticamente** subito dopo `hello` su ogni reconnect (2 volte, non è un vero press dell'utente). Con il nuovo interrupt, i due `listen:start` automatici uccidevano B9 prima che partisse un frame.
+
+**Fix parte 2 — flag `isInjectingB9`:** aggiunto `private isInjectingB9 = false` alla pipeline:
+
+- `injectTts()` lo imposta `true` a inizio, `false` dopo l'`await` (anche se interrotto)
+- `onListenStart()`: se `isInjectingB9` è true → `return` (ignora il listen:start automatico)
+- `onAbort()`: resetta `isInjectingB9 = false` per sbloccare subito il listen:start
+
+**Comportamento risultante:**
+
+- B9 injection non viene interrotta dai listen:start automatici del device su connect
+- Interrupt funziona correttamente durante processing e speaking (veri press utente successivi)
+- Se arriva `abort` durante B9, il flag viene pulito e il listen:start successivo funziona
+
+**Flusso log atteso:**
+
+```
+[XZ listen] start                           ← prima domanda
+[XZ listen] stop — N frames
+[XZ 2.3] Whisper: "..."
+[XZ 2.4] Agent: risposta="..."
+[XZ 2.6] Rate-ctrl: invio N frames
+[XZ listen] interrupt (era: speaking)       ← utente preme durante TTS
+[XZ listen] start                           ← nuova domanda
+```
+
 ---
 
-## Flusso completo messaggi (stato attuale 2026-03-24)
+## Flusso completo messaggi (stato attuale 2026-03-25)
 
 ```
 SESSIONE N (click 1 + click 2 = disconnect B8)
@@ -172,15 +209,15 @@ SESSIONE N+1 (reconnect)
 
 ---
 
-## State machine per sessione device
+## State machine per sessione device (B10)
 
 Ogni `DeviceSession` in `bridge.ts` ha il proprio `AudioPipeline`. Stati:
 
 ```
 IDLE
-  ↓ listen:start
+  ↓ listen:start  (o listen:start da qualsiasi stato = INTERRUPT)
 LISTENING  (accumula frame Opus nel buffer)
-  ↓ listen:stop
+  ↓ listen:stop  (oppure B8: disconnect implicito)
 PROCESSING  (Whisper → agentCommand → TTS → Opus encode)
   ↓ tts:start inviato
 SPEAKING  (invia frame Opus rate-controlled al device)
@@ -188,12 +225,17 @@ SPEAKING  (invia frame Opus rate-controlled al device)
 IDLE  (dialog mode: device manda subito listen:start → LISTENING)
 ```
 
+**Interrupt (B10):** `listen:start` in qualsiasi stato → `generation++` cancella tutto in volo → se `speaking`: invia `tts:stop` → `state = listening`.
+
 **Abort:** messaggio `{"type":"abort"}` dal device in qualsiasi stato → interrompi TTS in corso → svuota buffer → torna IDLE.
 
 ```
-SPEAKING → [abort ricevuto] → stop invio frame → tts:stop → IDLE
-PROCESSING → [abort ricevuto] → cancella richiesta agente → IDLE
+ANY + listen:start  → interrupt: tts:stop (se speaking) + generation++ + state→listening
+SPEAKING → [abort]  → stop invio frame → tts:stop → IDLE
+PROCESSING → [abort] → cancella richiesta agente → IDLE
 ```
+
+**Nota B9+B10:** `isInjectingB9=true` blocca `onListenStart()` durante B9 injection — il device manda 2× `listen:start` automatici su ogni connect (non sono press utente). Il flag viene pulito dopo l'inject o su `onAbort()`.
 
 ---
 

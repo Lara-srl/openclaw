@@ -43,3 +43,25 @@ bun scripts/xiaozhi-mock-client.ts
 # con audio WAV reale (16kHz mono)
 bun scripts/xiaozhi-mock-client.ts --wav /path/to/audio.wav --out received-tts.wav
 ```
+
+# Verificare se il gateway è attivo
+
+```bash
+ps aux | grep "openclaw-gateway" | grep -v grep
+
+# Vedere i log in tempo reale:
+
+tail -f /tmp/openclaw-gateway.log | sed 's/\x1b\[[0-9;]*m//g'
+
+# Solo log XiaoZhi (filtrati):
+
+tail -f /tmp/openclaw-gateway.log | grep --line-buffered "XZ\|xiaozhi"
+
+#Se il gateway non è attivo, riavvialo con:
+
+KEY=$(grep ANTHROPIC_API_KEY ~/.bashrc | cut -d= -f2-) pkill -9 -f openclaw-gateway 2>/dev/null; sleep 1
+
+ANTHROPIC_API_KEY="$KEY" nohup pnpm openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &
+
+sleep 3 && tail -5 /tmp/openclaw-gateway.log | sed 's/\x1b\[[0-9;]*m//g'
+```

@@ -68,9 +68,10 @@ export class AudioPipeline {
   }
 
   /** Device pressed button: start buffering audio. Interrupts any active state. */
-  onListenStart(): void {
-    // Device sends listen:start automatically on connect (not a real button press) — let B9 finish.
-    if (this.isInjectingB9) return;
+  onListenStart(mode?: string): void {
+    // During B9 injection, auto-sent listen:start (mode="auto" or no mode) is ignored.
+    // A real manual press (mode="manual") is NOT ignored — user explicitly interrupted.
+    if (this.isInjectingB9 && mode !== "manual") return;
     const prev = this.state;
     // Interrupt: if speaking, tell device to stop playback immediately
     if (prev === "speaking") {
@@ -81,14 +82,18 @@ export class AudioPipeline {
     this.clearSpeakingTimer();
     this.state = "listening";
     this.opusFrames = [];
+    const modeTag = mode ? ` mode=${mode}` : "";
     const tag = prev === "idle" ? "start" : `interrupt (era: ${prev})`;
-    console.log(`[XZ listen] ${tag}`);
+    console.log(`[XZ listen] ${tag}${modeTag}`);
   }
 
   /** Device released button (VAD stop): run the pipeline. */
-  onListenStop(): void {
+  onListenStop(mode?: string): void {
     const totalBytes = this.opusFrames.reduce((s, f) => s + f.length, 0);
-    console.log(`[XZ listen] stop — ${this.opusFrames.length} frames (${totalBytes} bytes)`);
+    const modeTag = mode ? ` mode=${mode}` : "";
+    console.log(
+      `[XZ listen] stop — ${this.opusFrames.length} frames (${totalBytes} bytes)${modeTag}`,
+    );
     if (this.state !== "listening") return;
     this.state = "processing";
     const frames = this.opusFrames;
@@ -140,7 +145,7 @@ export class AudioPipeline {
       console.log(`[XZ B8] disconnect during listen — implicit stop (${n} frames buffered)`);
       // onListenStop transitions state and fires process(); TTS sends will
       // silently no-op because ws.readyState !== OPEN.
-      this.onListenStop();
+      this.onListenStop("auto");
     } else {
       this.generation++;
       this.clearSpeakingTimer();

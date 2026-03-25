@@ -31,6 +31,8 @@ export type XiaozhuMessage = {
   type: string;
   /** listen / tts control state: "start" | "stop" | "detect" | "sentence_start" */
   state?: string;
+  /** listen mode: "auto" (VAD), "manual" (hold-to-talk), "realtime" (continuous) */
+  mode?: "auto" | "manual" | "realtime";
   text?: string;
   emotion?: string;
   /** For type:"audio" — raw Opus frame buffer (protocol v1, no header) */

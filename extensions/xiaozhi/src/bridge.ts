@@ -86,11 +86,13 @@ export class XiaozhiBridge {
             }
             if (msg.payload) pipeline.onAudioFrame(msg.payload);
             break;
-          case "listen":
-            console.log(`[XZ bridge] listen state=${msg.state}`);
-            if (msg.state === "start") pipeline.onListenStart();
-            if (msg.state === "stop") pipeline.onListenStop();
+          case "listen": {
+            const modeTag = msg.mode ? ` mode=${msg.mode}` : "";
+            console.log(`[XZ bridge] listen state=${msg.state}${modeTag}`);
+            if (msg.state === "start") pipeline.onListenStart(msg.mode);
+            if (msg.state === "stop") pipeline.onListenStop(msg.mode);
             break;
+          }
           case "abort":
             console.log(`[XZ bridge] abort`);
             pipeline.onAbort();

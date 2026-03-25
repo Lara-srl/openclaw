@@ -82,8 +82,37 @@ Esci dal monitor seriale con `Ctrl+]`.
 
 ## Stato verifica (2026-03-25)
 
-Primo flash: firmware mandava ancora `mode=auto` → build non ha ricompilato `esp_box3_board.cc`.
-**Da fare:** verificare che il file sia salvato, poi `idf.py fullclean && idf.py -p COM8 build flash`.
+**Problema 1 — build non ricompilava:** primo flash mandava ancora `mode=auto`.
+Fix: `idf.py fullclean` + verificare che il file fosse salvato. ✅
+
+**Problema 2 — `SetListeningMode` privata:** errore di compilazione su `app.SetListeningMode(...)`.
+Fix: spostare `SetListeningMode(ListeningMode mode)` da `private` a `public` in `application.h`. ✅
+
+**Problema 3 — WS non si apre (SCOPERTO 2026-03-25, da fixare):**
+`StartListening()` assume che la WS sia già aperta — non la apre.
+`ToggleChatState()` invece apre il canale WebSocket + avvia il listening.
+Il device andava in stato listening localmente ma non si connetteva mai al gateway.
+
+**Fix da applicare in `esp_box3_board.cc`:**
+
+```cpp
+boot_button_.OnPressDown([this]() {
+    auto& app = Application::GetInstance();
+    if (app.GetDeviceState() == kDeviceStateStarting) {
+        EnterWifiConfigMode();
+        return;
+    }
+    app.SetListeningMode(kListeningModeManualStop);  // imposta prima del toggle
+    app.ToggleChatState();  // apre WS + avvia listening
+});
+
+boot_button_.OnPressUp([this]() {
+    auto& app = Application::GetInstance();
+    if (app.GetDeviceState() == kDeviceStateListening) {
+        app.StopListening();
+    }
+});
+```
 
 Log atteso dopo fix:
 

@@ -1,6 +1,6 @@
 # Hold-to-Talk — Boot button XiaoZhi BOX-3
 
-> Data: 2026-03-25
+> Data: 2026-03-25 — Completato: 2026-03-26 ✅
 
 ## Contesto
 
@@ -26,7 +26,7 @@ La soluzione è modificare il **boot button** (laterale sinistro) da click-toggl
 
 ## Modifiche firmware — `main/boards/esp-box-3/esp_box3_board.cc`
 
-Funzione `InitializeButtons()` — sostituire `OnClick` con `OnPressDown` + `OnPressUp`:
+Funzione `InitializeButtons()` — codice finale (sostituisce `OnClick`):
 
 ```cpp
 void InitializeButtons() {
@@ -36,7 +36,9 @@ void InitializeButtons() {
             EnterWifiConfigMode();
             return;
         }
-        app.SetListeningMode(kListeningModeManualStop);
+        // StartListening() apre la WS e imposta kListeningModeManualStop internamente.
+        // NON chiamare SetListeningMode() prima: ha il side effect di cambiare lo stato
+        // a kDeviceStateListening, rompendo il branch idle in HandleStartListeningEvent.
         app.StartListening();
     });
 
@@ -60,9 +62,14 @@ void InitializeButtons() {
 
 **Note:**
 
-- `kListeningModeManualStop` → il firmware manda `mode=manual` nel `listen:start`
+- `StartListening()` → `HandleStartListeningEvent` → `ContinueOpenAudioChannel(kListeningModeManualStop)` → apre WS + imposta mode=manual
 - `OnDoubleClick` AEC mantenuto (dentro `#if CONFIG_USE_DEVICE_AEC`)
-- Il file `.bk` creato come backup non influenza il build (CMake ignora i file non dichiarati in `CMakeLists.txt`)
+- `SetListeningMode` non serve più nel button handler — può tornare `private` in `application.h`
+
+## SenseCAP Watcher
+
+Board file dedicato: `main/boards/sensecap-watcher/sensecap_watcher.cc`
+Stesso fix da applicare: sostituire `ToggleChatState()` con `StartListening()` nell'handler del bottone.
 
 ## Build e flash
 
@@ -151,7 +158,7 @@ Log atteso dopo fix:
 - Passa `msg.mode` a `pipeline.onListenStart/Stop`
 - Log `[XZ bridge] listen state=... mode=...`
 
-## State machine hold-to-talk (target)
+## State machine hold-to-talk (verificato ✅)
 
 ```
 IDLE

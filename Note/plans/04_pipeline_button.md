@@ -80,20 +80,29 @@ idf.py -p COM8 build flash monitor
 
 Esci dal monitor seriale con `Ctrl+]`.
 
-## Stato verifica (2026-03-25)
+## Stato verifica (2026-03-26) ✅ COMPLETATO
 
 **Problema 1 — build non ricompilava:** primo flash mandava ancora `mode=auto`.
 Fix: `idf.py fullclean` + verificare che il file fosse salvato. ✅
 
 **Problema 2 — `SetListeningMode` privata:** errore di compilazione su `app.SetListeningMode(...)`.
 Fix: spostare `SetListeningMode(ListeningMode mode)` da `private` a `public` in `application.h`. ✅
+(Poi ridiventata non necessaria — vedi Problema 4)
 
-**Problema 3 — WS non si apre (SCOPERTO 2026-03-25, da fixare):**
-`StartListening()` assume che la WS sia già aperta — non la apre.
-`ToggleChatState()` invece apre il canale WebSocket + avvia il listening.
-Il device andava in stato listening localmente ma non si connetteva mai al gateway.
+**Problema 3 — diagnosi errata (2026-03-25):**
+Conclusione iniziale: "StartListening() non apre la WS". ERRATA.
+La causa vera era il Problema 4.
 
-**Fix da applicare in `esp_box3_board.cc`:**
+**Problema 4 — `SetListeningMode` ha side effect (ROOT CAUSE, risolto 2026-03-26):**
+`SetListeningMode()` chiama internamente `SetDeviceState(kDeviceStateListening)`.
+Quindi chiamare `SetListeningMode` prima di `ToggleChatState`/`StartListening` cambiava
+lo stato a `listening` PRIMA che l'evento venisse processato. Il main task vedeva
+stato `listening` invece di `idle` e non apriva la WS.
+
+Fix: usare solo `app.StartListening()` — gestisce internamente sia l'apertura WS
+che `kListeningModeManualStop` (hardcoded in `HandleStartListeningEvent`).
+
+**Codice finale `esp_box3_board.cc`:**
 
 ```cpp
 boot_button_.OnPressDown([this]() {
@@ -102,8 +111,10 @@ boot_button_.OnPressDown([this]() {
         EnterWifiConfigMode();
         return;
     }
-    app.SetListeningMode(kListeningModeManualStop);  // imposta prima del toggle
-    app.ToggleChatState();  // apre WS + avvia listening
+    // StartListening() apre la WS e imposta kListeningModeManualStop internamente.
+    // NON chiamare SetListeningMode() prima: ha il side effect di cambiare lo stato
+    // a kDeviceStateListening, rompendo il branch idle in HandleStartListeningEvent.
+    app.StartListening();
 });
 
 boot_button_.OnPressUp([this]() {

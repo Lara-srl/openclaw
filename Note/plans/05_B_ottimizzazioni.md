@@ -1,65 +1,70 @@
 # Piano: Ottimizzazioni Audio XiaoZhi — Bitrate, pcm_24000, Streaming TTS
 
-## laude --resume 96959330-5615-4d83-80d6-dc9806ff9538
-
-## Context
-
-La pipeline XiaoZhi funziona end-to-end (hold-to-talk, B8/B9/B10 risolti). Le ottimizzazioni
-prioritarie sono:
-
-1. Audio che cracchia → Opus bitrate troppo basso + ElevenLabs restituisce 22050 Hz che viene
-   resamplinato con interpolazione lineare invece di essere richiesto direttamente a 24000 Hz
-2. Latenza percettibile (~6-9s) → il device inizia a parlare solo dopo che LLM + TTS sono
-   completamente finiti. Lo streaming via `onPartialReply` (già nel SDK) elimina questo gap.
-3. Risposte troppo lunghe → system prompt del main agent mancante di istruzioni concisione.
+> Aggiornato: 2026-03-27 — Stato: P0 COMPLETATO ✅, P1 da fare
 
 ---
 
-## P0a — Opus bitrate: 24kbps → 48kbps
+## Context
+
+La pipeline XiaoZhi funziona end-to-end (hold-to-talk, B8/B9/B10/B11 risolti). Le ottimizzazioni
+prioritarie sono:
+
+1. ~~Audio che cracchia~~ → ✅ **RISOLTO** (P0a bitrate + P0b pcm_24000 + B11 peak norm)
+2. **Latenza percettibile** (~6-9s) → il device inizia a parlare solo dopo LLM + TTS completi
+3. **Risposte troppo lunghe** → system prompt dell'agente mancante di istruzioni concisione
+
+---
+
+## P0a — Opus bitrate: 24kbps → 48kbps ✅ FATTO (commit 141799983)
 
 **File:** `extensions/xiaozhi/src/audio-pipeline.ts:20`
 
 ```ts
-// da:
-const DOWNLOAD_BITRATE = 24_000;
-// a:
-const DOWNLOAD_BITRATE = 48_000;
+const DOWNLOAD_BITRATE = 48_000; // era 24_000
 ```
-
-**Impatto:** nessuno sul protocollo (Opus è self-describing). Il device decodifica qualsiasi bitrate.
 
 ---
 
-## P0b — ElevenLabs telephony: pcm_22050 → pcm_24000 (fix nel core)
-
-**Problema:** `TELEPHONY_OUTPUT.elevenlabs = { format: "pcm_22050", sampleRate: 22050 }` in
-`src/tts/tts.ts:85`. Quando ElevenLabs è il provider TTS, restituisce 22050 Hz che viene
-resamplinato a 24000 Hz con interpolazione lineare → artefatti audio.
-
-**Verifica:** ElevenLabs supporta nativamente `pcm_24000` (S16LE, 24kHz) su tutti i modelli
-incluso `eleven_turbo_v2_5`. Nessuna differenza di latenza. Richiede tier Creator o superiore
-(stesso del pcm_22050).
+## P0b — ElevenLabs telephony: pcm_22050 → pcm_24000 ✅ FATTO (commit 141799983)
 
 **File:** `src/tts/tts.ts:85`
 
 ```ts
-// da:
-elevenlabs: { format: "pcm_22050", sampleRate: 22050 },
-// a:
-elevenlabs: { format: "pcm_24000", sampleRate: 24000 },
+elevenlabs: { format: "pcm_24000", sampleRate: 24000 }, // era pcm_22050 / 22050
 ```
 
-**Impatto:** fix globale per tutti i canali voice OpenClaw che usano ElevenLabs telephony
-(voice-call, xiaozhi, futuri canali). Il resampler in audio-pipeline.ts diventa no-op
-(`fromRate === toRate` → restituisce buffer invariato).
+**Impatto:** fix globale per tutti i canali voice OpenClaw che usano ElevenLabs telephony.
+Il resampler in `audio-pipeline.ts` diventa no-op (`fromRate === toRate`).
 
 ---
 
-## P1a — System prompt conciso nel main agent
+## B11 — Peak normalization: elimina picchi su vocali forti ✅ FATTO (commit 16119ff96)
 
-**File:** `~/.openclaw/agents/main/AGENTS.md` (o equivalente agent config)
+**File:** `extensions/xiaozhi/src/audio-pipeline.ts`
 
-Aggiungere istruzione:
+**Causa:** OpenAI TTS genera PCM near-full-scale → Opus SILK produce pre-echo su onset vocali aperte.
+
+**Fix:** `normalizePcm(pcm, targetPeak)` — scansiona il buffer, scala se il picco supera la soglia.
+Solo attenua, non amplifica mai.
+
+```ts
+const pcmResampled = resamplePcm(result.audioBuffer, result.sampleRate, DOWNLOAD_RATE);
+const pcm24k = normalizePcm(pcmResampled, 0.85); // cap peaks at ~-1.4 dBFS
+```
+
+**Calibrazione:**
+
+- `0.707` (−3 dBFS) → nessun artefatto, volume leggermente più basso
+- `0.85` (−1.4 dBFS) → audio pieno, nessun picco ← **valore scelto e verificato**
+- Se tornassero artefatti: abbassare a `0.75`; se troppo basso: alzare a `0.90`
+
+---
+
+## P1a — System prompt conciso nel main agent (da fare, ~5 min)
+
+**File:** `~/.openclaw/agents/main/AGENTS.md` (path da verificare sulla macchina)
+
+Aggiungere:
 
 ```
 Rispondi in modo conciso: 1-2 frasi se la domanda è semplice.
@@ -67,48 +72,68 @@ Usa risposte più lunghe solo per spiegazioni tecniche o richieste complesse.
 Niente premesse, niente conclusioni ridondanti.
 ```
 
-**Nota:** questo file va verificato — path esatto dipende dalla configurazione locale.
+---
+
+## P1b — Migrazione stack: Groq STT + Gemini LLM + ElevenLabs TTS (da fare)
+
+### Dove si configura ciascun componente
+
+| Componente       | Dove si configura  | Note                                                      |
+| ---------------- | ------------------ | --------------------------------------------------------- |
+| LLM → Gemini     | OpenClaw config ✅ | `openclaw config set agent.model google/gemini-2.5-flash` |
+| TTS → ElevenLabs | OpenClaw config ✅ | `tts.provider elevenlabs` + `apiKey` + `modelId`          |
+| STT → Groq       | Estensione xiaozhi | OpenClaw non ha astrazione STT — rimane nel codice        |
+
+### Comandi di configurazione (zero codice per LLM e TTS)
+
+```bash
+openclaw login  # scegli Google/Gemini, inserisci API key
+openclaw config set agent.model google/gemini-2.5-flash
+openclaw config set tts.provider elevenlabs
+openclaw config set tts.elevenlabs.apiKey <key>
+openclaw config set tts.elevenlabs.modelId eleven_turbo_v2_5
+```
+
+### STT → Groq (~20 righe in audio-pipeline.ts)
+
+Sostituire la chiamata `whisperTranscribe` con una verso l'endpoint Groq compatibile OpenAI:
+
+```ts
+// URL da cambiare in whisperTranscribe():
+"https://api.groq.com/openai/v1/audio/transcriptions";
+// model da cambiare:
+"whisper-large-v3";
+// API key da usare:
+process.env.GROQ_API_KEY;
+```
 
 ---
 
-## P1b — Streaming TTS via onPartialReply
+## P1c — Streaming TTS via onPartialReply (da fare, sessione dedicata)
 
 ### Analisi: nessun bypass necessario
 
-`runEmbeddedPiAgent` accetta già `onPartialReply?: (payload: { text?: string }) => void`
-(`src/agents/pi-embedded-runner/run/params.ts:89`). La callback riceve il testo **accumulato**
-aggiornato ad ogni token. Bypassing non necessario → sessione, tool, memory, auth failover,
-compaction restano invariati.
+`runEmbeddedPiAgent` accetta già `onPartialReply?: (payload: { text?: string }) => void`.
+La callback riceve il testo **accumulato** aggiornato ad ogni token. Sessione, tool, memory,
+auth failover, compaction restano invariati.
 
-### Architettura
-
-**Flusso attuale (batch):**
+### Flusso target
 
 ```
-listen:stop → Groq STT → runEmbeddedPiAgent (batch) → speak(full text) → tts:start + frames + tts:stop
-                                                                                                ↑
-                                                                           device inizia a parlare qui (~6-9s)
+listen:stop → Groq STT (~150ms) → runEmbeddedPiAgent (con onPartialReply)
+                  ↓ ogni token accumulato
+             buffer → sentence boundary?
+                  ↓ prima frase (~400ms)
+             TTS chunk → Opus encode → tts:start + frames
+                  ↓ frasi successive
+             TTS chunk → Opus encode → frames → tts:stop
+                                                     ↑
+                                      device inizia a parlare (~700ms dopo)
 ```
 
-**Flusso target (streaming):**
+### Modifiche a `audio-pipeline.ts`
 
-```
-listen:stop → Groq STT → runEmbeddedPiAgent (con onPartialReply)
-                              ↓ ogni token accumulato
-                         buffer → sentence boundary?
-                              ↓ prima frase (~400ms)
-                         TTS chunk → Opus encode → tts:start + frames
-                              ↓ frasi successive
-                         TTS chunk → Opus encode → frames
-                              ↓ agente finisce
-                         flush buffer → TTS → frames → tts:stop
-                                                              ↑
-                                                device inizia a parlare qui (~700ms)
-```
-
-### Modifiche a `extensions/xiaozhi/src/audio-pipeline.ts`
-
-**1. Nuova funzione `runAgentStreaming`** (sostituisce `runAgent` nel path streaming):
+**1. `runAgentStreaming`** — sostituisce `runAgent` nel path streaming:
 
 ```ts
 private async runAgentStreaming(
@@ -116,7 +141,6 @@ private async runAgentStreaming(
   onSentence: (sentence: string, isFirst: boolean) => Promise<void>,
 ): Promise<void> {
   // ...setup identico a runAgent...
-  let accumulated = "";
   let lastSent = 0;
   let buffer = "";
   let isFirst = true;
@@ -128,7 +152,6 @@ private async runAgentStreaming(
       const delta = full.slice(lastSent);
       buffer += delta;
       lastSent = full.length;
-      // sentence boundary: ". " "? " "! " o buffer > 120 chars con spazio
       const match = buffer.match(/^(.*?[.?!])\s+(.*)$/s);
       if (match || buffer.length > 120) {
         const sentence = match ? match[1] : buffer;
@@ -138,12 +161,11 @@ private async runAgentStreaming(
       }
     },
   });
-  // flush residuo
   if (buffer.trim()) await onSentence(buffer.trim(), isFirst);
 }
 ```
 
-**2. Refactor di `process()`** — sostituire la chiamata sequenziale:
+**2. Refactor di `process()`:**
 
 ```ts
 // da (batch):
@@ -161,41 +183,37 @@ await this.runAgentStreaming(text, async (sentence, isFirst) => {
 if (ttsStarted) this.sendTtsStop();
 ```
 
-**3. Nuova funzione `speakChunk(text, gen)`** — TTS + Opus encode + rate-ctrl per un singolo chunk:
+**3. `speakChunk(text, gen)`** — TTS + Opus encode + rate-ctrl per un singolo chunk.
 Estrae la logica TTS dall'attuale `speak()`, aggiunge check `gen` dopo ogni operazione costosa.
-
-**4. `sendTtsStart()` / `sendTtsStop()`** — estratti da `speak()` come metodi separati.
 
 ### Compatibilità B10
 
 Il check `if (gen !== this.generation) return` dopo ogni `speakChunk` garantisce che un
-interrupt durante lo streaming interrompa il flusso esattamente come nel batch. Il
-`rate-ctrl` esistente rimane invariato per chunk.
-
----
-
-## File da modificare
-
-| File                                          | Modifica                                                     |
-| --------------------------------------------- | ------------------------------------------------------------ |
-| `src/tts/tts.ts:85`                           | P0b: `pcm_22050` → `pcm_24000`                               |
-| `extensions/xiaozhi/src/audio-pipeline.ts:20` | P0a: bitrate 24k → 48k                                       |
-| `extensions/xiaozhi/src/audio-pipeline.ts`    | P1b: `runAgentStreaming`, `speakChunk`, refactor `process()` |
-| `~/.openclaw/agents/main/AGENTS.md`           | P1a: system prompt conciso (path da verificare)              |
+interrupt durante lo streaming interrompa il flusso esattamente come nel batch.
 
 ---
 
 ## Ordine di implementazione
 
-1. **P0a + P0b** insieme (2 righe, test immediato → ascoltare il TTS)
-2. **P1a** (5 minuti, impatto immediato sulla lunghezza risposte)
-3. **P1b** (sessione dedicata — refactor più grande, testate B10 dopo)
+```
+FATTO ✅:
+  P0a — bitrate 48k
+  P0b — ElevenLabs pcm_24000
+  B11 — peak normalization
 
----
+PROSSIMA SESSIONE:
+  1. P1a — system prompt conciso (5 min)
+  2. P1b — Groq STT (~20 righe codice)
+  3. P1b — Gemini LLM + ElevenLabs TTS (solo config)
+  4. Verifica latenza nei log
+  5. P1c — streaming (sessione dedicata, refactor più grande)
 
-## Verifica
+VERIFICA DOPO P1b:
+  → `tts:start` deve apparire ~1-2s dopo `listen:stop` (era ~6s)
+  → Test qualità audio ElevenLabs
+  → Test B10 (interrupt) con nuovo stack
 
-- P0a/P0b: riavviare gateway → parlare con device → audio non cracchia, ElevenLabs (quando configurato) non viene resamplinato
-- P1a: chiedere "che ore sono?" → risposta 1-2 frasi
-- P1b: nei log gateway deve apparire `tts:start` ~700ms dopo `listen:stop` invece di ~6s
-  - Testare B10 durante streaming (press durante speaking) → deve interrompere correttamente
+VERIFICA DOPO P1c (streaming):
+  → `tts:start` deve apparire ~700ms dopo `listen:stop`
+  → Test B10 durante streaming (press durante speaking chunk intermedio)
+```

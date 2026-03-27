@@ -25,6 +25,7 @@ const DOWNLOAD_FRAME_BYTES = DOWNLOAD_FRAME_SAMPLES * BYTES_PER_SAMPLE; // 2880
 
 // Opus encoder CTL codes
 const OPUS_SET_COMPLEXITY_REQUEST = 4010;
+const OPUS_RESET_STATE_REQUEST = 4028;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -279,6 +280,10 @@ export class AudioPipeline {
     console.log(
       `[XZ 2.5] TTS: ${result.audioBuffer.length} bytes raw → ${pcm24k.length} bytes PCM 24kHz`,
     );
+
+    // Reset encoder state so previous TTS call's predictor doesn't bleed into
+    // this stream and cause chirp/click artifacts at phoneme boundaries.
+    this.encoder.applyEncoderCTL(OPUS_RESET_STATE_REQUEST, 0);
 
     // Encode PCM → Opus frames (60ms each)
     const opusFrames: Buffer[] = [];

@@ -1,3 +1,6 @@
+Note/xiaozhi-esp32/
+Note/main/
+received-tts.wav
 node_modules
 **/node_modules/
 .env

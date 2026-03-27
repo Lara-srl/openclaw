@@ -159,3 +159,107 @@ Verifica dopo migrazione:
   → Test qualità audio ElevenLabs vs OpenAI TTS
   → Test interrupt B10 con streaming attivo (edge case da verificare)
 ```
+
+d
+Committed "docs(xiaozhi): 05_ottimizzazioni — piano P0 bitrate, P1 streaming Groq+Gemini+ElevenLabs" with 1 files
+
+● Fatto — 94db3c797. Il piano è documentato con il punto critico dello streaming marcato come "da verificare" prima di toccare qualsiasi cosa.
+
+Prossimo passo concreto: P0 — cambiare il bitrate da 24k a 48k. Vuoi farlo adesso?
+
+❯ è corretto che questi paramenti si mettano direttamente nell'esteszione e non nelle conf di openclaw? alla fine attualemente claude è coonfigurato nelle cconfig di openclaw
+
+● Ottima domanda architetturale. Verifichiamo cosa fa già il runtime.
+
+● Searched for 7 patterns (ctrl+o to expand)
+
+● Risposta precisa per ciascun componente:
+
+TTS → ElevenLabs ✅ già nel core OpenClaw
+TtsProvider = "elevenlabs" | "openai" | "edge" — è già supportato, configurabile via:
+openclaw config set tts.provider elevenlabs
+openclaw config set tts.elevenlabs.apiKey <key>
+openclaw config set tts.elevenlabs.modelId eleven_turbo_v2_5
+textToSpeechTelephony lo usa automaticamente. Zero modifiche all'estensione.
+
+LLM → Gemini — da verificare
+Dipende da quali provider LLM OpenClaw supporta. Se Gemini è supportato, basta cambiare il modello in config come già si fa con Claude.
+
+STT → Groq ❌ non nel core
+OpenClaw non ha un'astrazione STT per upload file. L'estensione chiama già OpenAI direttamente — Groq è lo stesso pattern, URL diverso. Questo deve stare nell'estensione.
+
+---
+
+Nota sul formato ElevenLabs telephony: ho visto che il core mappa elevenlabs telephony a pcm_22050 (22kHz), non 24kHz. Se la pipeline XiaoZhi aspetta 24kHz, c'è un mismatch — verifichiamo prima di attivarlo
+via config.
+
+Aggiorno il file 05 con queste info?
+
+✻ Sautéed for 1m 5s
+
+❯ verifica questo LLM → Gemini — da verificare  
+ Dipende da quali provider LLM OpenClaw supporta. Se Gemini è supportato, basta cambiare il modello in config come già si fa con Claude.
+
+● Searched for 5 patterns, read 1 file (ctrl+o to expand)
+
+● ✅ Gemini è supportato nativamente in OpenClaw.
+
+● Searched for 2 patterns (ctrl+o to expand)
+
+● Risposta definitiva:
+
+Gemini ✅ supportato nativamente in OpenClaw — ha provider google con API key, e c'è già applyGoogleGeminiModelDefault nel codebase.
+
+Per migrare il LLM basta:
+openclaw login # scegli Google/Gemini, inserisci API key
+openclaw config set agent.model google/gemini-2.5-flash
+
+Zero modifiche all'estensione — esattamente come Claude ora.
+
+Riepilogo architetturale definitivo:
+
+┌──────────────────┬────────────────────┬─────────────────────────────────────────────────────────┐
+│ Componente │ Dove si configura │ Note │
+├──────────────────┼────────────────────┼─────────────────────────────────────────────────────────┤
+│ LLM → Gemini │ OpenClaw config ✅ │ openclaw config set agent.model google/gemini-2.5-flash │
+├──────────────────┼────────────────────┼─────────────────────────────────────────────────────────┤
+│ TTS → ElevenLabs │ OpenClaw config ✅ │ tts.provider elevenlabs + apiKey + modelId │
+├──────────────────┼────────────────────┼─────────────────────────────────────────────────────────┤
+│ STT → Groq │ Estensione xiaozhi │ OpenClaw non ha astrazione STT — rimane nel codice │
+└──────────────────┴────────────────────┴─────────────────────────────────────────────────────────┘
+
+Solo STT tocca il codice dell'estensione. Tutto il resto è configurazione.
+
+✻ Crunched for 43s
+
+❯ che cos'è evelenlabs telefony ? che effetti colllateraili può avere fai una verifica
+
+● Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Trovato il problema. Risultato della verifica:
+
+Cos'è telephony: è la modalità TTS pensata per voice call/telefonia — restituisce PCM raw (non MP3/Opus) a basso sample rate, pronto per essere inviato al dispositivo voce.
+
+Il problema concreto con ElevenLabs:
+
+TELEPHONY_OUTPUT = {
+openai: { format: "pcm", sampleRate: 24000 } ← esatto per XiaoZhi
+elevenlabs: { format: "pcm_22050", sampleRate: 22050 } ← ⚠️ mismatch!
+}
+
+Con OpenAI: 24kHz → resamplePcm è no-op (stessa frequenza) → nessun artefatto
+
+Con ElevenLabs via config: 22050 Hz → resamplePcm converte 22050→24000 Hz con interpolazione lineare (qualità bassa, ratio non intero 0.918) → introduce artefatti audio
+
+Ovvero: attivare ElevenLabs via tts.provider elevenlabs potrebbe suonare PEGGIO di OpenAI, nonostante la voce sia migliore.
+
+Opzioni per risolvere:
+
+┌────────────────────────────────────────────────────────────────┬────────┬───────────────────────────────────────────────────────────────────────┐
+│ Opzione │ Effort │ Note │
+├────────────────────────────────────────────────────────────────┼────────┼───────────────────────────────────────────────────────────────────────┤
+│ Chiamare ElevenLabs direttamente nell'estensione con pcm_24000 │ basso │ ElevenLabs supporta pcm_24000 natively — bypass il telephony del core │
+├────────────────────────────────────────────────────────────────┼────────┼───────────────────────────────────────────────────────────────────────┤
+│ Modificare TELEPHONY_OUTPUT.elevenlabs nel core a pcm_24000 │ minimo │ Fix corretto per tutti i canali voice, ma tocca il core │
+├────────────────────────────────────────────────────────────────┼────────┼───────────────────────────────────────────────────────────────────────┤
+│ Migliorare il resampler (Lanczos invece di lineare) │ medio │ Fix generale, utile anche per altri casi │

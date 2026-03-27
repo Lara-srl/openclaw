@@ -1,6 +1,6 @@
 # Piano Fase 2 — Audio Pipeline
 
-> Creato: 2026-03-20 — Aggiornato: 2026-03-25 — Stato: B1-B10 risolti ✅, pipeline 2.1→2.7 funzionante ✅, interrupt mid-session IMPLEMENTATO ✅
+> Creato: 2026-03-20 — Aggiornato: 2026-03-27 — Stato: B1-B11 risolti ✅, pipeline 2.1→2.7 funzionante ✅, interrupt mid-session IMPLEMENTATO ✅, audio senza picchi ✅
 
 ---
 
@@ -176,9 +176,33 @@ if (Buffer.isBuffer(data) && data[0] !== 0x7b) return { type: "audio", payload: 
 [XZ listen] start                           ← nuova domanda
 ```
 
+### B11 — Picco/cinguetto su vocali forti (es. "A" italiana) ✅ RISOLTO 2026-03-27
+
+**File:** `extensions/xiaozhi/src/audio-pipeline.ts`
+**Sintomo:** artefatto sonoro percepito come "cinguetto" o "picco" all'onset delle vocali aperte (es. "ciao", "casa", "grazie"). Presente con TTS OpenAI `pcm` 24kHz.
+**Causa:** il TTS genera PCM con picchi di ampiezza vicini a 0 dBFS. Il codec Opus SILK in modalità speech, ricevendo un segnale near-full-scale, produce pre-echo/pre-ring all'onset della vocale.
+**Fix:** aggiunta funzione `normalizePcm()` in `audio-pipeline.ts`. Scansiona il buffer PCM in due pass (O(n)):
+
+- Pass 1: trova il picco massimo assoluto
+- Pass 2: se il picco supera la soglia, scala proporzionalmente tutti i sample
+- Solo attenua, non amplifica mai
+- Target: `0.85 × 32767 ≈ 27851` (≈ −1.4 dBFS) — calibrato per audio pieno senza picchi
+- Chiamata in `speak()` dopo `resamplePcm()`, prima di `encoder.encode()`
+
+```ts
+const pcmResampled = resamplePcm(result.audioBuffer, result.sampleRate, DOWNLOAD_RATE);
+const pcm24k = normalizePcm(pcmResampled, 0.85); // cap peaks at ~-1.4 dBFS
+```
+
+**Note calibrazione:**
+
+- `targetPeak = 0.707` (−3 dBFS) → audio perfetto, volume leggermente più basso
+- `targetPeak = 0.85` (−1.4 dBFS) → audio pieno, nessun picco, **valore scelto**
+- Se tornassero artefatti: abbassare a `0.75`; se troppo basso: alzare a `0.90`
+
 ---
 
-## Flusso completo messaggi (stato attuale 2026-03-25)
+## Flusso completo messaggi (stato attuale 2026-03-27)
 
 ```
 SESSIONE N (click 1 + click 2 = disconnect B8)

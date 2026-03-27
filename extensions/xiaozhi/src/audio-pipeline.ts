@@ -276,7 +276,8 @@ export class AudioPipeline {
     }
 
     // Resample to 24kHz if TTS provider returned a different rate
-    const pcm24k = resamplePcm(result.audioBuffer, result.sampleRate, DOWNLOAD_RATE);
+    const pcmResampled = resamplePcm(result.audioBuffer, result.sampleRate, DOWNLOAD_RATE);
+    const pcm24k = normalizePcm(pcmResampled, 0.85); // cap peaks at ~-1.4 dBFS
     console.log(
       `[XZ 2.5] TTS: ${result.audioBuffer.length} bytes raw → ${pcm24k.length} bytes PCM 24kHz`,
     );
@@ -492,6 +493,30 @@ async function whisperTranscribe(wav: Buffer, apiKey: string): Promise<string | 
 
   const json = (await res.json()) as { text?: string };
   return json.text ?? null;
+}
+
+// ─── PCM peak normalizer ──────────────────────────────────────────────────────
+
+/**
+ * Scales PCM samples so the peak amplitude does not exceed targetPeak (0–1).
+ * Only attenuates — never amplifies. Prevents near-full-scale TTS output from
+ * causing Opus encoder pre-echo artifacts on loud vowels (e.g. Italian "A").
+ */
+function normalizePcm(pcm: Buffer, targetPeak = 0.707): Buffer {
+  const samples = pcm.length / BYTES_PER_SAMPLE;
+  let maxAbs = 0;
+  for (let i = 0; i < samples; i++) {
+    maxAbs = Math.max(maxAbs, Math.abs(pcm.readInt16LE(i * BYTES_PER_SAMPLE)));
+  }
+  const limit = targetPeak * 32767;
+  if (maxAbs === 0 || maxAbs <= limit) return pcm; // already within target
+  const gain = limit / maxAbs;
+  const out = Buffer.alloc(pcm.length);
+  for (let i = 0; i < samples; i++) {
+    const sample = Math.round(pcm.readInt16LE(i * BYTES_PER_SAMPLE) * gain);
+    out.writeInt16LE(sample, i * BYTES_PER_SAMPLE);
+  }
+  return out;
 }
 
 // ─── PCM resampler (linear interpolation) ─────────────────────────────────────

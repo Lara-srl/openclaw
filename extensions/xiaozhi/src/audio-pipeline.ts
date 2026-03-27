@@ -3,7 +3,7 @@
  * Per-session state machine: IDLE → LISTENING → PROCESSING → SPEAKING → IDLE
  *
  * Upload  (device → server): Opus 16kHz mono 60ms/frame, protocol v1 (raw, no header)
- * Download (server → device): Opus 24kHz mono 60ms/frame, 24kbps, complexity 10
+ * Download (server → device): Opus 24kHz mono 60ms/frame, 48kbps, complexity 10
  */
 
 import { randomUUID } from "node:crypto";
@@ -17,7 +17,7 @@ import { buildLlm, buildStt, buildTts } from "./protocol.js";
 
 const UPLOAD_RATE = 16_000; // mic: device → server
 const DOWNLOAD_RATE = 24_000; // speaker: server → device
-const DOWNLOAD_BITRATE = 24_000; // 24 kbps
+const DOWNLOAD_BITRATE = 48_000; // 48 kbps
 const FRAME_MS = 60;
 const DOWNLOAD_FRAME_SAMPLES = (DOWNLOAD_RATE * FRAME_MS) / 1000; // 1440
 const BYTES_PER_SAMPLE = 2; // 16-bit signed LE

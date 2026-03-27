@@ -326,10 +326,13 @@ export class AudioPipeline {
     }
   }
 
-  /** Send Opus frames one at a time, one per FRAME_MS. */
+  /** Send Opus frames one at a time, one per FRAME_MS.
+   * Uses drift-corrected scheduling: each delay is computed from the absolute
+   * start time so setTimeout jitter does not accumulate across frames. */
   private sendFramesRateControlled(frames: Buffer[], gen: number): Promise<void> {
     return new Promise((resolve) => {
       let i = 0;
+      const startTime = Date.now();
       const sendNext = () => {
         if (gen !== this.generation || i >= frames.length) {
           resolve();
@@ -339,7 +342,10 @@ export class AudioPipeline {
           this.ws.send(frames[i]);
         }
         i++;
-        this.speakingTimer = setTimeout(sendNext, FRAME_MS);
+        // Schedule next frame relative to start, not relative to "now",
+        // so accumulated setTimeout drift doesn't cause buffer underruns.
+        const delay = Math.max(0, startTime + i * FRAME_MS - Date.now());
+        this.speakingTimer = setTimeout(sendNext, delay);
       };
       sendNext();
     });

@@ -177,31 +177,31 @@ export class AudioPipeline {
 
       if (gen !== this.generation) return;
 
-      // 2.3 — Whisper STT
-      const apiKey = process.env.OPENAI_API_KEY;
+      // 2.3 — Groq Whisper STT
+      const apiKey = process.env.GROQ_API_KEY;
       if (!apiKey) {
-        console.warn("[XZ 2.3] Whisper: OPENAI_API_KEY not set — silent ack");
+        console.warn("[XZ 2.3] Groq STT: GROQ_API_KEY not set — silent ack");
         this.silentAck();
         return;
       }
       if (pcm16k.length === 0) {
-        console.warn("[XZ 2.3] Whisper: 0 bytes PCM — silent ack");
+        console.warn("[XZ 2.3] Groq STT: 0 bytes PCM — silent ack");
         this.silentAck();
         return;
       }
 
       const wav = buildWav(pcm16k, UPLOAD_RATE, 1);
-      console.log(`[XZ 2.3] Whisper: invio ${wav.length} bytes WAV...`);
+      console.log(`[XZ 2.3] Groq STT: invio ${wav.length} bytes WAV...`);
       let text: string | null;
       try {
         text = await whisperTranscribe(wav, apiKey);
       } catch (err) {
-        console.error("[XZ 2.3] Whisper: ERROR:", err);
+        console.error("[XZ 2.3] Groq STT: ERROR:", err);
         this.silentAck();
         return;
       }
       console.log(
-        text?.trim() ? `[XZ 2.3] Whisper: "${text}"` : `[XZ 2.3] Whisper: null — silenzio`,
+        text?.trim() ? `[XZ 2.3] Groq STT: "${text}"` : `[XZ 2.3] Groq STT: null — silenzio`,
       );
 
       if (gen !== this.generation) return;
@@ -471,18 +471,18 @@ function buildWav(pcm: Buffer, sampleRate: number, channels: number): Buffer {
 async function whisperTranscribe(wav: Buffer, apiKey: string): Promise<string | null> {
   const form = new FormData();
   form.append("file", new Blob([wav], { type: "audio/wav" }), "audio.wav");
-  form.append("model", "whisper-1");
+  form.append("model", "whisper-large-v3");
   // No language lock — let Whisper auto-detect (supports multilingual use)
 
   let res: Response;
   try {
-    res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}` },
       body: form,
     });
   } catch (err) {
-    console.error("[xiaozhi] Whisper fetch error:", err);
+    console.error("[xiaozhi] Groq STT fetch error:", err);
     return null;
   }
 

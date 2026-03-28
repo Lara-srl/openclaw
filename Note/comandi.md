@@ -50,11 +50,20 @@ bun scripts/xiaozhi-mock-client.ts --wav /path/to/audio.wav --out received-tts.w
 
 # Vedere i log in tempo reale:
 
-#Se il gateway non è attivo, riavvialo con:
+#Se il gateway non è attivo, riavvialo con : Chiave Antropic. ma il modello
 KEY=$(grep ANTHROPIC_API_KEY ~/.bashrc | cut -d= -f2-); pkill -9 -f openclaw-gateway 2>/dev/null; sleep 1; ANTHROPIC_API_KEY="$KEY" nohup pnpm openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 & sleep 3 && tail -5 /tmp/openclaw-gateway.log | sed 's/\x1b\[[0-9;]*m//g'
+
+#Se il gateway non è attivo, riavvialo con : Modello Gemini
+GKEY=$(grep GEMINI_API_KEY ~/.bashrc | cut -d= -f2-); GROQ_API_KEY=$(grep GROQ_API_KEY ~/.bashrc | cut -d= -f2-); pkill -9 -f openclaw-gateway 2>/dev/null; sleep 1; GEMINI_API_KEY="$GKEY" GROQ_API_KEY="$GROQ_API_KEY" nohup pnpm openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 & sleep 5 && tail -20 /tmp/openclaw-gateway.log | sed 's/\x1b\[[0-9;]*m//g'
+
 
 # Solo log XiaoZhi (filtrati):
 tail -f /tmp/openclaw-gateway.log | sed 's/\x1b\[[0-9;]*m//g'
-tail -f /tmp/openclaw-gateway.log | grep --line-buffered "XZ\|xiaozhi\hello"
+# Questo piu utile per debug
+tail -f /tmp/openclaw-gateway.log | grep --line-buffered "XZ\|xiaozhi\|hello"
 tail -f /tmp/openclaw-gateway.log | sed 's/\x1b\[[0-9;]*m//g'
+
+# utilizzo pnpm openclaw in quanto simao in sorgente
+pnpm openclaw login
+pnpm openclaw config set agent.model google/gemini-3-flash-preview
 ```

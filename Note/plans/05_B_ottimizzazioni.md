@@ -216,4 +216,10 @@ VERIFICA DOPO P1b:
 VERIFICA DOPO P1c (streaming):
   → `tts:start` deve apparire ~700ms dopo `listen:stop`
   → Test B10 durante streaming (press durante speaking chunk intermedio)
+
+POST-MVP — Gestione sessione per assistente vocale:
+  → Problema: sessione cresce durante la giornata → più token → latenza Agent crescente + risposte più lunghe
+  → Fix: reset automatico sessione in audio-pipeline.ts (ogni N turni o ogni giorno)
+  → Alternativa: session TTL aggressivo (< 30min invece di 1h)
+  → Da monitorare: latenza Agent nel corso della giornata per verificare degradazione
 ```

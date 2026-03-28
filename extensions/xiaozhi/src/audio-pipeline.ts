@@ -471,7 +471,7 @@ function buildWav(pcm: Buffer, sampleRate: number, channels: number): Buffer {
 async function whisperTranscribe(wav: Buffer, apiKey: string): Promise<string | null> {
   const form = new FormData();
   form.append("file", new Blob([wav], { type: "audio/wav" }), "audio.wav");
-  form.append("model", "whisper-large-v3");
+  form.append("model", "whisper-large-v3-turbo");
   // No language lock — let Whisper auto-detect (supports multilingual use)
 
   let res: Response;

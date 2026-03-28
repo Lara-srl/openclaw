@@ -192,6 +192,7 @@ export class AudioPipeline {
 
       const wav = buildWav(pcm16k, UPLOAD_RATE, 1);
       console.log(`[XZ 2.3] Groq STT: invio ${wav.length} bytes WAV...`);
+      const sttT0 = Date.now();
       let text: string | null;
       try {
         text = await whisperTranscribe(wav, apiKey);
@@ -200,8 +201,11 @@ export class AudioPipeline {
         this.silentAck();
         return;
       }
+      const sttMs = Date.now() - sttT0;
       console.log(
-        text?.trim() ? `[XZ 2.3] Groq STT: "${text}"` : `[XZ 2.3] Groq STT: null — silenzio`,
+        text?.trim()
+          ? `[XZ 2.3] Groq STT: "${text}" (${sttMs}ms)`
+          : `[XZ 2.3] Groq STT: null — silenzio (${sttMs}ms)`,
       );
 
       if (gen !== this.generation) return;

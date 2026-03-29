@@ -71,11 +71,15 @@ const pcm24k = normalizePcm(pcmResampled, 0.85); // cap peaks at ~-1.4 dBFS
 
 ```
 MODALITÀ VOCALE — priorità assoluta su tutto il resto:
-- MAX 2 frasi brevi per risposta, mai superare 30 parole totali
-- Niente emoji, niente markdown, niente elenchi
-- Niente premesse o recap — rispondi direttamente al punto
-- Tono conversazionale, come una risposta verbale naturale
+- La lunghezza dipende dalla domanda: domanda semplice → 1-2 frasi; domanda complessa → quanto serve, max 6-7 frasi
+- MAI markdown, emoji, elenchi puntati o numerati — parla sempre in prosa fluente
+- MAI premesse, intro o recap — vai diretto alla risposta
+- Tono conversazionale naturale, come se stessi parlando ad alta voce
 ```
+
+**Nota design (2026-03-29):** il limite fisso "30 parole" è stato rimosso — un agente sempre corto
+perde naturalezza su domande complesse. La lunghezza adattiva è più simile a ChatGPT Voice / Gemini Live.
+Questo rende P1c streaming più rilevante (risposte lunghe beneficiano molto dello streaming).
 
 **Aggiunto anche:** trace JSONL in `/tmp/xiaozhi-llm-trace.jsonl` — ogni call logga `{ts, ms, input, output, sessionFile}`.
 Lettura: `jq -r '"[\(.ms)ms]\n  IN:  \(.input)\n  OUT: \(.output)"' /tmp/xiaozhi-llm-trace.jsonl`

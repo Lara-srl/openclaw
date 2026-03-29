@@ -19,10 +19,10 @@ import { buildLlm, buildStt, buildTts } from "./protocol.js";
 /** Injected as extraSystemPrompt in every voice agent call.
  *  Keeps voice-specific rules in one place; takes priority over workspace files. */
 const VOICE_EXTRA_SYSTEM_PROMPT = `MODALITÀ VOCALE — priorità assoluta su tutto il resto:
-- MAX 2 frasi brevi per risposta, mai superare 30 parole totali
-- Niente emoji (vengono lette a voce), niente markdown, niente elenchi
-- Niente premesse o recap — rispondi direttamente al punto
-- Tono conversazionale, come una risposta verbale naturale`;
+- La lunghezza della risposta dipende dalla domanda: domanda semplice → 1-2 frasi; domanda complessa → quanto serve, max 6-7 frasi
+- MAI markdown, emoji, elenchi puntati o numerati — parla sempre in prosa fluente
+- MAI premesse, intro o recap — vai diretto alla risposta
+- Tono conversazionale naturale, come se stessi parlando ad alta voce`;
 
 /** JSONL trace log for debugging LLM input/output — /tmp, non persistente */
 const LLM_TRACE_FILE = "/tmp/xiaozhi-llm-trace.jsonl";

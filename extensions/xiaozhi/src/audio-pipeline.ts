@@ -7,11 +7,25 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { appendFileSync } from "node:fs";
 import { OpusEncoder } from "@discordjs/opus";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
 import type { WebSocket } from "ws";
 import { loadCoreAgentDeps } from "./core-bridge.js";
 import { buildLlm, buildStt, buildTts } from "./protocol.js";
+
+// ─── Agent prompts ────────────────────────────────────────────────────────────
+
+/** Injected as extraSystemPrompt in every voice agent call.
+ *  Keeps voice-specific rules in one place; takes priority over workspace files. */
+const VOICE_EXTRA_SYSTEM_PROMPT = `MODALITÀ VOCALE — priorità assoluta su tutto il resto:
+- MAX 2 frasi brevi per risposta, mai superare 30 parole totali
+- Niente emoji (vengono lette a voce), niente markdown, niente elenchi
+- Niente premesse o recap — rispondi direttamente al punto
+- Tono conversazionale, come una risposta verbale naturale`;
+
+/** JSONL trace log for debugging LLM input/output — /tmp, non persistente */
+const LLM_TRACE_FILE = "/tmp/xiaozhi-llm-trace.jsonl";
 
 // ─── Audio constants ──────────────────────────────────────────────────────────
 
@@ -409,6 +423,7 @@ export class AudioPipeline {
     const timeoutMs = deps.resolveAgentTimeoutMs({ cfg });
     const thinkLevel = deps.resolveThinkingDefault({ cfg });
     const runId = `xiaozhi:${entry.sessionId}:${Date.now()}`;
+    const t0 = Date.now();
 
     try {
       const result = await deps.runEmbeddedPiAgent({
@@ -425,6 +440,7 @@ export class AudioPipeline {
         runId,
         lane: "xiaozhi",
         agentDir,
+        extraSystemPrompt: VOICE_EXTRA_SYSTEM_PROMPT,
       });
 
       const texts = (result.payloads ?? [])
@@ -432,7 +448,23 @@ export class AudioPipeline {
         .map((p) => p.text?.trim())
         .filter(Boolean);
 
-      return texts.join(" ") || null;
+      const response = texts.join(" ") || null;
+
+      // Trace LLM input/output to JSONL for debugging
+      try {
+        const traceEntry = JSON.stringify({
+          ts: new Date().toISOString(),
+          ms: Date.now() - t0,
+          input: text,
+          output: response,
+          sessionFile, // full conversation + system prompt context
+        });
+        appendFileSync(LLM_TRACE_FILE, traceEntry + "\n");
+      } catch {
+        // trace failure must never break the pipeline
+      }
+
+      return response;
     } catch (err) {
       console.error("[xiaozhi] agent error:", err);
       return null;

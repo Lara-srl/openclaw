@@ -1,6 +1,6 @@
 # Piano: Ottimizzazioni Audio XiaoZhi — Bitrate, pcm_24000, Streaming TTS
 
-> Aggiornato: 2026-03-27 — Stato: P0 COMPLETATO ✅, P1 da fare
+> Aggiornato: 2026-03-29 — Stato: P0 ✅, P1a ✅, P1b-STT ✅, P1b-LLM ✅, P1c da fare
 
 ---
 
@@ -60,17 +60,25 @@ const pcm24k = normalizePcm(pcmResampled, 0.85); // cap peaks at ~-1.4 dBFS
 
 ---
 
-## P1a — System prompt conciso nel main agent (da fare, ~5 min)
+## P1a — System prompt conciso ✅ FATTO (2026-03-29)
 
-**File:** `~/.openclaw/agents/main/AGENTS.md` (path da verificare sulla macchina)
+**Approccio scelto:** `extraSystemPrompt` in `runEmbeddedPiAgent` — non tocca il workspace globale.
 
-Aggiungere:
+**File:** `extensions/xiaozhi/src/audio-pipeline.ts` — costante `VOICE_EXTRA_SYSTEM_PROMPT` in sezione
+`// ─── Agent prompts ───` (top del file, unico punto da editare).
+
+**Contenuto:**
 
 ```
-Rispondi in modo conciso: 1-2 frasi se la domanda è semplice.
-Usa risposte più lunghe solo per spiegazioni tecniche o richieste complesse.
-Niente premesse, niente conclusioni ridondanti.
+MODALITÀ VOCALE — priorità assoluta su tutto il resto:
+- MAX 2 frasi brevi per risposta, mai superare 30 parole totali
+- Niente emoji, niente markdown, niente elenchi
+- Niente premesse o recap — rispondi direttamente al punto
+- Tono conversazionale, come una risposta verbale naturale
 ```
+
+**Aggiunto anche:** trace JSONL in `/tmp/xiaozhi-llm-trace.jsonl` — ogni call logga `{ts, ms, input, output, sessionFile}`.
+Lettura: `jq -r '"[\(.ms)ms]\n  IN:  \(.input)\n  OUT: \(.output)"' /tmp/xiaozhi-llm-trace.jsonl`
 
 ---
 
@@ -200,26 +208,20 @@ FATTO ✅:
   P0a — bitrate 48k
   P0b — ElevenLabs pcm_24000
   B11 — peak normalization
+  P1a — extraSystemPrompt voice rules + JSONL trace
+  P1b-STT — Groq whisper-large-v3-turbo (~150ms)
+  P1b-LLM — Gemini 3 Flash Preview (config: agents.defaults.model)
+
+MISURAZIONI REALI (2026-03-29, Gemini 3 Flash + Groq STT):
+  → 3617ms e 5105ms dal trace — già molto meglio di 6-9s con Opus
+  → cacheRead=0 sempre: Gemini non ha prompt caching automatico (vedi TO_DO T1)
+  → input tokens: ~15k per call (workspace gonfia, vedi TO_DO T3)
 
 PROSSIMA SESSIONE:
-  1. P1a — system prompt conciso (5 min)
-  2. P1b — Groq STT (~20 righe codice)
-  3. P1b — Gemini LLM + ElevenLabs TTS (solo config)
-  4. Verifica latenza nei log
-  5. P1c — streaming (sessione dedicata, refactor più grande)
+  → P1c — streaming TTS (onPartialReply → speakChunk, sessione dedicata)
 
-VERIFICA DOPO P1b:
-  → `tts:start` deve apparire ~1-2s dopo `listen:stop` (era ~6s)
-  → Test qualità audio ElevenLabs
-  → Test B10 (interrupt) con nuovo stack
-
-VERIFICA DOPO P1c (streaming):
-  → `tts:start` deve apparire ~700ms dopo `listen:stop`
-  → Test B10 durante streaming (press durante speaking chunk intermedio)
-
-POST-MVP — Gestione sessione per assistente vocale:
-  → Problema: sessione cresce durante la giornata → più token → latenza Agent crescente + risposte più lunghe
-  → Fix: reset automatico sessione in audio-pipeline.ts (ogni N turni o ogni giorno)
-  → Alternativa: session TTL aggressivo (< 30min invece di 1h)
-  → Da monitorare: latenza Agent nel corso della giornata per verificare degradazione
+POST-MVP — Da implementare (vedi TO_DO.md):
+  → T1: Gemini context caching esplicito
+  → T2: Session reset automatico (sliding window)
+  → T3: Workspace trimming (da 15k a ~5k token)
 ```

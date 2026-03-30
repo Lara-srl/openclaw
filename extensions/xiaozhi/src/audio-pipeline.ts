@@ -577,9 +577,8 @@ function maybeFloat32ToInt16(buf: Buffer): Buffer {
 // ─── PCM peak normalizer ──────────────────────────────────────────────────────
 
 /**
- * Scales PCM samples so the peak amplitude does not exceed targetPeak (0–1).
- * Only attenuates — never amplifies. Prevents near-full-scale TTS output from
- * causing Opus encoder pre-echo artifacts on loud vowels (e.g. Italian "A").
+ * Normalizes PCM peak to targetPeak (0–1): amplifies if too quiet, attenuates
+ * if too loud. Caps at targetPeak to prevent Opus pre-echo on loud vowels.
  */
 function normalizePcm(pcm: Buffer, targetPeak = 0.707): Buffer {
   // Floor in case provider returns odd-length buffer (e.g. Voxtral)
@@ -589,7 +588,7 @@ function normalizePcm(pcm: Buffer, targetPeak = 0.707): Buffer {
     maxAbs = Math.max(maxAbs, Math.abs(pcm.readInt16LE(i * BYTES_PER_SAMPLE)));
   }
   const limit = targetPeak * 32767;
-  if (maxAbs === 0 || maxAbs <= limit) return pcm; // already within target
+  if (maxAbs === 0 || maxAbs === limit) return pcm; // already at target
   const gain = limit / maxAbs;
   const out = Buffer.alloc(pcm.length);
   for (let i = 0; i < samples; i++) {

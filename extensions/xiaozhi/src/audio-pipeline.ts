@@ -539,7 +539,8 @@ async function whisperTranscribe(wav: Buffer, apiKey: string): Promise<string | 
  * causing Opus encoder pre-echo artifacts on loud vowels (e.g. Italian "A").
  */
 function normalizePcm(pcm: Buffer, targetPeak = 0.707): Buffer {
-  const samples = pcm.length / BYTES_PER_SAMPLE;
+  // Floor in case provider returns odd-length buffer (e.g. Voxtral)
+  const samples = Math.floor(pcm.length / BYTES_PER_SAMPLE);
   let maxAbs = 0;
   for (let i = 0; i < samples; i++) {
     maxAbs = Math.max(maxAbs, Math.abs(pcm.readInt16LE(i * BYTES_PER_SAMPLE)));

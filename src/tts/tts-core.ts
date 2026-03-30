@@ -618,10 +618,7 @@ export async function openaiTTS(params: {
       body: JSON.stringify({
         model,
         input: text,
-        // Voxtral (Mistral) uses voice_id (UUID); standard OpenAI-compatible endpoints use voice
-        ...(isCustomOpenAIEndpoint() && /^[0-9a-f-]{36}$/i.test(voice)
-          ? { voice_id: voice }
-          : { voice }),
+        voice,
         response_format: responseFormat,
       }),
       signal: controller.signal,

@@ -299,7 +299,12 @@ export class AudioPipeline {
     const pcmInt16 = maybeFloat32ToInt16(pcmRaw);
     // Resample to 24kHz if TTS provider returned a different rate
     const pcmResampled = resamplePcm(pcmInt16, result.sampleRate, DOWNLOAD_RATE);
-    const pcm24k = normalizePcm(pcmResampled, 0.85); // cap peaks at ~-1.4 dBFS
+    // XIAOZHI_TTS_GAIN: target peak 0.1–1.0, default 0.85. Tune per voice in env.
+    const ttsGain = Math.min(
+      1.0,
+      Math.max(0.1, parseFloat(process.env.XIAOZHI_TTS_GAIN ?? "0.85")),
+    );
+    const pcm24k = normalizePcm(pcmResampled, ttsGain);
     console.log(
       `[XZ 2.5] TTS: ${result.audioBuffer.length} bytes raw → ${pcm24k.length} bytes PCM 24kHz`,
     );

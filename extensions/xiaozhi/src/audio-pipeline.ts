@@ -293,8 +293,10 @@ export class AudioPipeline {
       return;
     }
 
+    // Convert float32→int16 if provider returns float32 (e.g. Voxtral)
+    const pcmInt16 = maybeFloat32ToInt16(result.audioBuffer);
     // Resample to 24kHz if TTS provider returned a different rate
-    const pcmResampled = resamplePcm(result.audioBuffer, result.sampleRate, DOWNLOAD_RATE);
+    const pcmResampled = resamplePcm(pcmInt16, result.sampleRate, DOWNLOAD_RATE);
     const pcm24k = normalizePcm(pcmResampled, 0.85); // cap peaks at ~-1.4 dBFS
     console.log(
       `[XZ 2.5] TTS: ${result.audioBuffer.length} bytes raw → ${pcm24k.length} bytes PCM 24kHz`,
@@ -529,6 +531,25 @@ async function whisperTranscribe(wav: Buffer, apiKey: string): Promise<string | 
 
   const json = (await res.json()) as { text?: string };
   return json.text ?? null;
+}
+
+// ─── Float32→Int16 converter ─────────────────────────────────────────────────
+
+/**
+ * Voxtral (api.mistral.ai) returns float32 LE PCM; all other providers (OpenAI,
+ * ElevenLabs) return int16 LE. Detects Voxtral via OPENAI_TTS_BASE_URL and
+ * converts accordingly. No-op for all other endpoints.
+ */
+function maybeFloat32ToInt16(buf: Buffer): Buffer {
+  const baseUrl = (process.env.OPENAI_TTS_BASE_URL ?? "").toLowerCase();
+  if (!baseUrl.includes("mistral")) return buf;
+  const samples = Math.floor(buf.length / 4); // float32 = 4 bytes/sample
+  const out = Buffer.alloc(samples * 2);
+  for (let i = 0; i < samples; i++) {
+    const f = Math.max(-1, Math.min(1, buf.readFloatLE(i * 4)));
+    out.writeInt16LE(Math.round(f * 32767), i * 2);
+  }
+  return out;
 }
 
 // ─── PCM peak normalizer ──────────────────────────────────────────────────────

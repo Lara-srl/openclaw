@@ -130,3 +130,19 @@ Aggiunta in fondo al file (sezione `## Voice`):
 - I file in `~/.openclaw/workspace/` NON sono nel repo Git — sono dati utente runtime.
 - Per backup/versioning del profilo agente, copiare manualmente o usare un repo privato.
 - Modifiche a `SOUL.md` / `AGENTS.md` hanno effetto immediato alla prossima sessione agente.
+
+## Avvia gateway — stack Mistral (feat/voxtral-tts)
+
+```bash
+# Mistral LLM + Voxtral TTS + Groq STT
+MKEY=$(grep MISTRAL_API_KEY ~/.bashrc | cut -d= -f2-)
+GKEY=$(grep GROQ_API_KEY ~/.bashrc | cut -d= -f2-)
+pkill -9 -f openclaw-gateway 2>/dev/null; sleep 1
+MISTRAL_API_KEY="$MKEY" GROQ_API_KEY="$GKEY" OPENAI_TTS_BASE_URL="https://api.mistral.ai/v1" \
+  nohup pnpm openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &
+sleep 5 && tail -20 /tmp/openclaw-gateway.log | sed 's/\x1b\[[0-9;]*m//g'
+
+# Con XIAOZHI_TTS_GAIN custom (default 0.85, range 0.1–1.0):
+XIAOZHI_TTS_GAIN=1.0 MISTRAL_API_KEY="$MKEY" GROQ_API_KEY="$GKEY" OPENAI_TTS_BASE_URL="https://api.mistral.ai/v1" \
+  nohup pnpm openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &
+```

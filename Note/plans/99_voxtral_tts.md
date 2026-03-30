@@ -2,7 +2,7 @@
 
 > Creato: 2026-03-26 — Aggiornato: 2026-03-30
 >
-> **Stato**: TTS funzionante ✅ (audio OK su device, branch feat/voxtral-tts) — STT da integrare — volume TTS basso (da fixare)
+> **Stato**: TTS funzionante ✅ (audio OK su device, branch feat/voxtral-tts) — Volume TTS risolto con XIAOZHI_TTS_GAIN ✅ — STT da integrare
 
 ---
 
@@ -197,6 +197,48 @@ curl -X POST https://api.mistral.ai/v1/audio/transcriptions \
   -F "file=@/tmp/test-lara.pcm;type=audio/pcm" \
   -F "model=voxtral-mini-latest" \
   -F "language=it"
+```
+
+---
+
+## Volume TTS — XIAOZHI_TTS_GAIN
+
+Voxtral restituisce float32 LE con ampiezza ~0.3–0.5 → dopo conversione int16, il segnale è al 30–50% del massimo.
+`normalizePcm` è ora **bidirezionale** (amplifica se sotto target, attenua se sopra).
+
+| Variabile          | Default | Range     | Note                                                   |
+| ------------------ | ------- | --------- | ------------------------------------------------------ |
+| `XIAOZHI_TTS_GAIN` | `0.85`  | `0.1–1.0` | Peak target normalizzato; set in env prima del gateway |
+
+```bash
+# Esempio: gain massimo per voce bassa (es. Francesco con sample PC)
+XIAOZHI_TTS_GAIN=1.0 ... pnpm openclaw gateway run ...
+```
+
+> La voce "Francesco" è stata creata con registrazione da microfono PC (bassa qualità).
+> Per una voce migliore vedere sezione "Come creare una voce migliore" sotto.
+
+---
+
+## Come creare una voce migliore
+
+### Via console.mistral.ai (GUI)
+
+1. Vai su **https://console.mistral.ai/** → sezione **Voices**
+2. Clicca **Create voice**
+3. Carica un audio WAV/MP3 di **10–30 secondi** — voce italiana chiara, senza rumore di fondo
+4. Registrazione consigliata: smartphone in stanza silenziosa, o campione da voice actor
+5. Copia il `voice_id` (UUID) ottenuto → aggiorna `~/.openclaw/openclaw.json` → `messages.tts.openai.voice`
+
+### Via API
+
+```bash
+MKEY=$(grep MISTRAL_API_KEY ~/.bashrc | cut -d= -f2-)
+curl -X POST https://api.mistral.ai/v1/audio/voices \
+  -H "Authorization: Bearer $MKEY" \
+  -F 'file=@/percorso/voce-italiana.wav' \
+  -F 'name=lara-italiana'
+# Risposta: {"id":"<UUID>","name":"lara-italiana",...}
 ```
 
 ---

@@ -191,35 +191,35 @@ export class AudioPipeline {
 
       if (gen !== this.generation) return;
 
-      // 2.3 — Groq Whisper STT
-      const apiKey = process.env.GROQ_API_KEY;
-      if (!apiKey) {
-        console.warn("[XZ 2.3] Groq STT: GROQ_API_KEY not set — silent ack");
+      // 2.3 — Voxtral STT (Mistral EU)
+      const sttApiKey = process.env.MISTRAL_API_KEY;
+      if (!sttApiKey) {
+        console.warn("[XZ 2.3] Voxtral STT: MISTRAL_API_KEY not set — silent ack");
         this.silentAck();
         return;
       }
       if (pcm16k.length === 0) {
-        console.warn("[XZ 2.3] Groq STT: 0 bytes PCM — silent ack");
+        console.warn("[XZ 2.3] Voxtral STT: 0 bytes PCM — silent ack");
         this.silentAck();
         return;
       }
 
       const wav = buildWav(pcm16k, UPLOAD_RATE, 1);
-      console.log(`[XZ 2.3] Groq STT: invio ${wav.length} bytes WAV...`);
+      console.log(`[XZ 2.3] Voxtral STT: invio ${wav.length} bytes WAV...`);
       const sttT0 = Date.now();
       let text: string | null;
       try {
-        text = await whisperTranscribe(wav, apiKey);
+        text = await whisperTranscribe(wav, sttApiKey);
       } catch (err) {
-        console.error("[XZ 2.3] Groq STT: ERROR:", err);
+        console.error("[XZ 2.3] Voxtral STT: ERROR:", err);
         this.silentAck();
         return;
       }
       const sttMs = Date.now() - sttT0;
       console.log(
         text?.trim()
-          ? `[XZ 2.3] Groq STT: "${text}" (${sttMs}ms)`
-          : `[XZ 2.3] Groq STT: null — silenzio (${sttMs}ms)`,
+          ? `[XZ 2.3] Voxtral STT: "${text}" (${sttMs}ms)`
+          : `[XZ 2.3] Voxtral STT: null — silenzio (${sttMs}ms)`,
       );
 
       if (gen !== this.generation) return;
@@ -293,9 +293,18 @@ export class AudioPipeline {
       return;
     }
 
+    // Voxtral returns JSON {"audio_data":"<base64>"} — unwrap first
+    const pcmRaw = maybeUnwrapVoxtralResponse(result.audioBuffer);
+    // Convert float32→int16 if provider returns float32 (e.g. Voxtral)
+    const pcmInt16 = maybeFloat32ToInt16(pcmRaw);
     // Resample to 24kHz if TTS provider returned a different rate
-    const pcmResampled = resamplePcm(result.audioBuffer, result.sampleRate, DOWNLOAD_RATE);
-    const pcm24k = normalizePcm(pcmResampled, 0.85); // cap peaks at ~-1.4 dBFS
+    const pcmResampled = resamplePcm(pcmInt16, result.sampleRate, DOWNLOAD_RATE);
+    // XIAOZHI_TTS_GAIN: target peak 0.1–1.0, default 0.85. Tune per voice in env.
+    const ttsGain = Math.min(
+      1.0,
+      Math.max(0.1, parseFloat(process.env.XIAOZHI_TTS_GAIN ?? "0.85")),
+    );
+    const pcm24k = normalizePcm(pcmResampled, ttsGain);
     console.log(
       `[XZ 2.5] TTS: ${result.audioBuffer.length} bytes raw → ${pcm24k.length} bytes PCM 24kHz`,
     );
@@ -507,23 +516,23 @@ function buildWav(pcm: Buffer, sampleRate: number, channels: number): Buffer {
 async function whisperTranscribe(wav: Buffer, apiKey: string): Promise<string | null> {
   const form = new FormData();
   form.append("file", new Blob([wav], { type: "audio/wav" }), "audio.wav");
-  form.append("model", "whisper-large-v3-turbo");
-  // No language lock — let Whisper auto-detect (supports multilingual use)
+  form.append("model", "voxtral-mini-latest");
+  form.append("language", "it");
 
   let res: Response;
   try {
-    res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+    res = await fetch("https://api.mistral.ai/v1/audio/transcriptions", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}` },
       body: form,
     });
   } catch (err) {
-    console.error("[xiaozhi] Groq STT fetch error:", err);
+    console.error("[xiaozhi] Voxtral STT fetch error:", err);
     return null;
   }
 
   if (!res.ok) {
-    console.error(`[xiaozhi] Whisper HTTP ${res.status}:`, await res.text());
+    console.error(`[xiaozhi] Voxtral STT HTTP ${res.status}:`, await res.text());
     return null;
   }
 
@@ -531,12 +540,50 @@ async function whisperTranscribe(wav: Buffer, apiKey: string): Promise<string | 
   return json.text ?? null;
 }
 
+// ─── Voxtral JSON unwrap ──────────────────────────────────────────────────────
+
+/**
+ * Voxtral non-streaming endpoint returns JSON: {"audio_data": "<base64>"}.
+ * Unwrap and decode to raw bytes before any PCM processing.
+ * No-op for all other endpoints (binary response).
+ */
+function maybeUnwrapVoxtralResponse(buf: Buffer): Buffer {
+  const baseUrl = (process.env.OPENAI_TTS_BASE_URL ?? "").toLowerCase();
+  if (!baseUrl.includes("mistral")) return buf;
+  if (buf[0] !== 0x7b) return buf; // not JSON
+  try {
+    const json = JSON.parse(buf.toString("utf8")) as { audio_data?: string };
+    if (json.audio_data) return Buffer.from(json.audio_data, "base64");
+  } catch {
+    // not valid JSON, return as-is
+  }
+  return buf;
+}
+
+// ─── Float32→Int16 converter ─────────────────────────────────────────────────
+
+/**
+ * Voxtral (api.mistral.ai) returns float32 LE PCM; all other providers (OpenAI,
+ * ElevenLabs) return int16 LE. Detects Voxtral via OPENAI_TTS_BASE_URL and
+ * converts accordingly. No-op for all other endpoints.
+ */
+function maybeFloat32ToInt16(buf: Buffer): Buffer {
+  const baseUrl = (process.env.OPENAI_TTS_BASE_URL ?? "").toLowerCase();
+  if (!baseUrl.includes("mistral")) return buf;
+  const samples = Math.floor(buf.length / 4); // float32 = 4 bytes/sample
+  const out = Buffer.alloc(samples * 2);
+  for (let i = 0; i < samples; i++) {
+    const f = Math.max(-1, Math.min(1, buf.readFloatLE(i * 4)));
+    out.writeInt16LE(Math.round(f * 32767), i * 2);
+  }
+  return out;
+}
+
 // ─── PCM peak normalizer ──────────────────────────────────────────────────────
 
 /**
- * Scales PCM samples so the peak amplitude does not exceed targetPeak (0–1).
- * Only attenuates — never amplifies. Prevents near-full-scale TTS output from
- * causing Opus encoder pre-echo artifacts on loud vowels (e.g. Italian "A").
+ * Normalizes PCM peak to targetPeak (0–1): amplifies if too quiet, attenuates
+ * if too loud. Caps at targetPeak to prevent Opus pre-echo on loud vowels.
  */
 function normalizePcm(pcm: Buffer, targetPeak = 0.707): Buffer {
   // Floor in case provider returns odd-length buffer (e.g. Voxtral)
@@ -546,7 +593,7 @@ function normalizePcm(pcm: Buffer, targetPeak = 0.707): Buffer {
     maxAbs = Math.max(maxAbs, Math.abs(pcm.readInt16LE(i * BYTES_PER_SAMPLE)));
   }
   const limit = targetPeak * 32767;
-  if (maxAbs === 0 || maxAbs <= limit) return pcm; // already within target
+  if (maxAbs === 0 || maxAbs === limit) return pcm; // already at target
   const gain = limit / maxAbs;
   const out = Buffer.alloc(pcm.length);
   for (let i = 0; i < samples; i++) {

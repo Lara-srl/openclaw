@@ -1,121 +1,194 @@
-# Analisi TTS: Voxtral (Mistral) vs ElevenLabs per LaraGoci
+# Analisi TTS/STT: Voxtral (Mistral) per LaraGoci
 
-## Verdetto
-
-**✅ Voxtral è il TTS sovrano giusto — testarlo SUBITO con 0 righe di codice.**
-
-Voxtral è stato rilasciato il 26 marzo 2026 (3 giorni fa). È OpenAI-compatible,
-supporta italiano nativo con PCM 24kHz, è EU (Parigi), e costa 99% meno di ElevenLabs.
-Il path di integrazione esiste già in OpenClaw senza toccare codice sorgente.
+> Creato: 2026-03-26 — Aggiornato: 2026-03-30
+>
+> **Stato**: TTS integrato ✅ (voice_id fix committato) — STT da integrare — config gateway da completare
 
 ---
 
-## Findings Voxtral TTS (2026-03-26)
+## Stack Mistral completo (obiettivo)
 
-### Specifiche tecniche rilevanti
+| Componente | Modello                 | Endpoint                                         | Stato                                    |
+| ---------- | ----------------------- | ------------------------------------------------ | ---------------------------------------- |
+| LLM        | `mistral-small-latest`  | `https://api.mistral.ai/v1`                      | ✅ configurato                           |
+| TTS        | `voxtral-mini-tts-2603` | `https://api.mistral.ai/v1/audio/speech`         | ✅ codice fatto — config gateway da fare |
+| STT        | `voxtral-mini-latest`   | `https://api.mistral.ai/v1/audio/transcriptions` | ⏳ da integrare                          |
 
-| Parametro        | Valore                                                                 |
-| ---------------- | ---------------------------------------------------------------------- |
-| Modello          | `voxtral-mini-tts-2603` (4B params)                                    |
-| API endpoint     | `POST https://api.mistral.ai/v1/audio/speech`                          |
-| Autenticazione   | `Authorization: Bearer <MISTRAL_API_KEY>`                              |
-| Formato output   | PCM 24kHz, WAV, MP3, Opus, FLAC, AAC                                   |
-| **PCM 24kHz**    | ✅ Nativo — zero conversione per pipeline xiaozhi                      |
-| Italiano         | ✅ supportato — **NO preset** (`it_female` non esiste) → voice cloning |
-| Qualità italiano | Al pari di ElevenLabs Flash v2.5 (nessun bug noto)                     |
-| Latenza API      | ~0.8s per testo breve (vs ~0.5s ElevenLabs)                            |
-| Costo            | $0.016 / 1k chars (vs ElevenLabs ~$0.30/min ≈ 99% risparmio)           |
-| Open source      | CC BY-NC 4.0 — auto-host possibile (16GB+ VRAM)                        |
-| Scaleway         | ❌ Solo STT (Transcribe). TTS usa api.mistral.ai (ancora EU)           |
+---
 
-### Formato request
+## TTS Voxtral — Findings reali (2026-03-30)
+
+### Specifiche tecniche verificate
+
+| Parametro       | Valore                                                                             |
+| --------------- | ---------------------------------------------------------------------------------- |
+| Modello         | `voxtral-mini-tts-2603`                                                            |
+| API endpoint    | `POST https://api.mistral.ai/v1/audio/speech`                                      |
+| Autenticazione  | `Authorization: Bearer <MISTRAL_API_KEY>`                                          |
+| Formato output  | PCM 24kHz, WAV, MP3, Opus, FLAC, AAC                                               |
+| **PCM 24kHz**   | ✅ Nativo — zero conversione per pipeline xiaozhi                                  |
+| Risposta        | ✅ **Binario diretto** — NON JSON con `audio_data` base64 (nota 26-mar era errata) |
+| Preset italiani | ❌ Non esistono — `it_female` → 404. Serve voice cloning con `voice_id` UUID       |
+| Latenza API     | ~1.2s per frase breve (misurata in test reale)                                     |
+| Costo           | $0.016 / 1k chars (vs ElevenLabs ~$0.30/min ≈ 99% risparmio)                       |
+| EU              | ✅ Parigi (OPCORE)                                                                 |
+
+### Formato request corretto
 
 ```json
 {
   "model": "voxtral-mini-tts-2603",
   "input": "Ciao, come stai?",
-  "voice_id": "<id-voce-creata>",
+  "voice_id": "10e8fb02-3a0a-4b93-81c2-32bd37b7d6a4",
   "response_format": "pcm"
 }
 ```
 
-> ⚠️ **NON è OpenAI-compatible**: usa `voice_id` (non `voice`) e richiede una voce
-> precedentemente creata tramite API Voices, **oppure** `ref_audio` (base64) per cloning one-shot.
-> Nessun preset built-in come `"it_female"`.
+> ⚠️ `voice_id` (non `voice`) — questo è l'unico campo non OpenAI-compatible.
+> La risposta è binario PCM diretto, non JSON. `arrayBuffer()` funziona as-is.
 
-**Alternativa one-shot (senza creare voce):**
+### Voce italiana creata
+
+| Campo    | Valore                                           |
+| -------- | ------------------------------------------------ |
+| Nome     | `francesco` (voce di test, rinominare)           |
+| voice_id | `10e8fb02-3a0a-4b93-81c2-32bd37b7d6a4`           |
+| Creata   | console.mistral.ai — upload audio italiano 3-10s |
+
+Per creare nuove voci (o sostituire `francesco` con voce femminile migliore):
+
+```bash
+MKEY=$(grep MISTRAL_API_KEY ~/.bashrc | cut -d= -f2-)
+# Lista voci account:
+curl -s https://api.mistral.ai/v1/audio/voices -H "Authorization: Bearer $MKEY" | python3 -m json.tool
+
+# Crea nuova voce da file audio:
+curl -X POST https://api.mistral.ai/v1/audio/voices \
+  -H "Authorization: Bearer $MKEY" \
+  -F 'file=@/percorso/audio-italiano.wav' \
+  -F 'name=lara-italiana'
+```
+
+---
+
+## Fix implementato in OpenClaw
+
+**File**: `src/tts/tts-core.ts` — funzione `openaiTTS()` (commit `91b9778ef`)
+
+Quando il campo `voice` è un UUID (36 chars hex+dash) E si usa un custom endpoint,
+invia `voice_id` invece di `voice`. Backward-compatible: endpoint OpenAI standard ignorano `voice_id`.
+
+```typescript
+// Voxtral (Mistral) uses voice_id (UUID); standard OpenAI-compatible endpoints use voice
+...(isCustomOpenAIEndpoint() && /^[0-9a-f-]{36}$/i.test(voice)
+  ? { voice_id: voice }
+  : { voice }),
+```
+
+---
+
+## Configurazione gateway (da fare)
+
+Il CLI `pnpm openclaw config set tts.*` non supporta la chiave `tts` top-level —
+va scritto direttamente in `~/.openclaw/openclaw.json`.
+
+### 1. Aggiungi a `~/.bashrc`
+
+```bash
+export OPENAI_TTS_BASE_URL=https://api.mistral.ai/v1
+```
+
+### 2. Aggiungi sezione `tts` in `~/.openclaw/openclaw.json`
 
 ```json
 {
-  "model": "voxtral-mini-tts-2603",
-  "input": "Ciao, come stai?",
-  "ref_audio": "<base64-audio-3s>",
-  "response_format": "pcm"
+  "tts": {
+    "provider": "openai",
+    "openai": {
+      "apiKey": "<MISTRAL_API_KEY>",
+      "model": "voxtral-mini-tts-2603",
+      "voice": "10e8fb02-3a0a-4b93-81c2-32bd37b7d6a4"
+    }
+  }
 }
 ```
 
-La risposta è JSON con campo `audio_data` (base64), non stream binario diretto.
+> `apiKey` nel JSON evita collisioni con `OPENAI_API_KEY` globale.
+> `OPENAI_TTS_BASE_URL` fa puntare le chiamate a Mistral invece che OpenAI.
+
+### 3. Riavvia gateway
+
+```bash
+cd ~/openclaw
+MKEY=$(grep MISTRAL_API_KEY ~/.bashrc | cut -d= -f2-)
+GKEY=$(grep GROQ_API_KEY ~/.bashrc | cut -d= -f2-)
+pkill -9 -f openclaw-gateway 2>/dev/null; sleep 1
+MISTRAL_API_KEY="$MKEY" \
+GROQ_API_KEY="$GKEY" \
+OPENAI_TTS_BASE_URL="https://api.mistral.ai/v1" \
+nohup pnpm openclaw gateway run --bind loopback --port 18789 --force \
+  > /tmp/openclaw-gateway.log 2>&1 &
+sleep 5 && tail -20 /tmp/openclaw-gateway.log | sed 's/\x1b\[[0-9;]*m//g'
+```
 
 ---
 
-## Path integrazione — NON 0 righe di codice
+## STT Voxtral — da integrare
 
-⚠️ **Revisione**: Voxtral NON è drop-in OpenAI-compatible per TTS.
-Il provider `openaiTTS()` in `src/tts/tts-core.ts` invia `voice` (stringa), non `voice_id`.
-La risposta è JSON `{audio_data: base64}`, non stream binario — il parser attuale non funziona.
+### Specifiche
 
-**Opzioni:**
+| Parametro   | Valore                                                |
+| ----------- | ----------------------------------------------------- |
+| Modello     | `voxtral-mini-latest`                                 |
+| Endpoint    | `POST https://api.mistral.ai/v1/audio/transcriptions` |
+| Compatibile | OpenAI Whisper API ✅ — stessa struttura multipart    |
+| Italiano    | ✅ supportato (13 lingue)                             |
+| Costo       | $0.003/min (vs Groq ~$0.00 ma ZDR ok)                 |
+| Latenza     | sub-200ms (Realtime), batch per offline               |
 
-### Opzione A: patch minima `openaiTTS()` (~20 righe)
+### Modifica richiesta
 
-- Mappare `voice` → `voice_id`
-- Decodificare `audio_data` base64 → Buffer
-- Creare preventivamente una voce italiana su console.mistral.ai → salvare l'ID
+File: `extensions/xiaozhi/src/audio-pipeline.ts` — funzione `whisperTranscribe()` (~riga 507)
 
-### Opzione B: nuovo provider `voxtralTTS()` in `src/tts/tts-core.ts` (~40 righe)
+Cambiare solo URL e model:
 
-- Più pulito, nessun rischio regressione OpenAI
-- Aggiungere `"voxtral"` a `TtsProvider` in `src/config/types.tts.ts`
+```typescript
+// Da (Groq):
+url = "https://api.groq.com/openai/v1/audio/transcriptions";
+model = "whisper-large-v3-turbo";
+apiKey = GROQ_API_KEY;
 
-**Prerequisito comune**: creare la voce italiana su https://console.mistral.ai/
-(upload 3-10s audio italiano → ottieni `voice_id`)
+// A (Voxtral):
+url = "https://api.mistral.ai/v1/audio/transcriptions";
+model = "voxtral-mini-latest";
+apiKey = MISTRAL_API_KEY;
+```
 
----
-
-## Piano test (prima di decidere)
-
-1. Ottenere Mistral API key: https://console.mistral.ai/
-2. Creare voce italiana su https://console.mistral.ai/ → upload 3-10s audio → copiare `voice_id`
-3. Test curl con `voice_id` reale:
-   ```bash
-   # risposta JSON con audio_data base64 → salvare e decodificare
-   curl -X POST https://api.mistral.ai/v1/audio/speech \
-     -H "Authorization: Bearer $MISTRAL_API_KEY" \
-     -H "Content-Type: application/json" \
-     -d '{"model":"voxtral-mini-tts-2603","input":"Ciao, sono Lara. Come posso aiutarti oggi?","voice_id":"<tuo-voice-id>","response_format":"pcm"}' \
-     | jq -r '.audio_data' | base64 -d > /tmp/test.pcm
-   ffplay -f s16le -ar 24000 -ac 1 /tmp/test.pcm
-   ```
-4. Se qualità ok → implementare Opzione A o B (patch TTS provider, ~20-40 righe)
+~5 righe di codice. Zero cambiamenti all'architettura (stesso formato multipart OpenAI-compatible).
 
 ---
 
-## Decisione finale
+## Test curl STT (prima di integrare)
 
-| Fase                 | TTS                      | Motivazione                      |
-| -------------------- | ------------------------ | -------------------------------- |
-| **Ora**              | Test Voxtral (0 codice)  | Rilasciato 3 giorni fa, EU, free |
-| **Se test ok**       | Voxtral per produzione   | Sostituisce ElevenLabs subito    |
-| **Se test fallisce** | ElevenLabs come fallback | Già integrato, zero rischio      |
-| **Piper**            | ❌ Scartato              | Qualità italiana insufficiente   |
+```bash
+MKEY=$(grep MISTRAL_API_KEY ~/.bashrc | cut -d= -f2-)
+# Genera un PCM di test con il TTS attuale, poi trascrivilo:
+curl -X POST https://api.mistral.ai/v1/audio/transcriptions \
+  -H "Authorization: Bearer $MKEY" \
+  -F "file=@/tmp/test-lara.pcm;type=audio/pcm" \
+  -F "model=voxtral-mini-latest" \
+  -F "language=it"
+```
 
 ---
 
-## File coinvolti
+## Decisioni prese (2026-03-30)
 
-| File                        | Funzione                  | Linea   | Modifica necessaria               |
-| --------------------------- | ------------------------- | ------- | --------------------------------- |
-| `src/tts/tts-core.ts`       | `openaiTTS()`             | 591-635 | Nessuna (usa OPENAI_TTS_BASE_URL) |
-| `src/tts/tts-core.ts`       | custom endpoint detection | 337-380 | Nessuna (già rilassa validazione) |
-| `src/tts/tts.ts`            | `textToSpeechTelephony()` | 702-789 | Nessuna                           |
-| `~/.openclaw/openclaw.json` | config TTS                | —       | Aggiungere model/voice Voxtral    |
+| Componente | Decisione                        | Note                             |
+| ---------- | -------------------------------- | -------------------------------- |
+| TTS        | ✅ Voxtral — implementato        | voice_id UUID fix in tts-core.ts |
+| LLM        | ✅ mistral-small-latest          | configurato in openclaw.json     |
+| STT        | ⏳ Voxtral — prossimo step       | ~5 righe in audio-pipeline.ts    |
+| ElevenLabs | Fallback se Voxtral non soddisfa | Già integrato, zero rischio      |
+| Piper      | ❌ Scartato                      | Qualità italiana insufficiente   |
+| Groq STT   | Mantenere come fallback          | Funziona, ZDR attivo, $0.00/min  |

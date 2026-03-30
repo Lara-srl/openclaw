@@ -2,17 +2,17 @@
 
 > Creato: 2026-03-26 — Aggiornato: 2026-03-30
 >
-> **Stato**: TTS integrato ✅ (voice_id fix committato) — STT da integrare — config gateway da completare
+> **Stato**: TTS funzionante ✅ (audio OK su device, branch feat/voxtral-tts) — STT da integrare — volume TTS basso (da fixare)
 
 ---
 
 ## Stack Mistral completo (obiettivo)
 
-| Componente | Modello                 | Endpoint                                         | Stato                                    |
-| ---------- | ----------------------- | ------------------------------------------------ | ---------------------------------------- |
-| LLM        | `mistral-small-latest`  | `https://api.mistral.ai/v1`                      | ✅ configurato                           |
-| TTS        | `voxtral-mini-tts-2603` | `https://api.mistral.ai/v1/audio/speech`         | ✅ codice fatto — config gateway da fare |
-| STT        | `voxtral-mini-latest`   | `https://api.mistral.ai/v1/audio/transcriptions` | ⏳ da integrare                          |
+| Componente | Modello                 | Endpoint                                         | Stato                    |
+| ---------- | ----------------------- | ------------------------------------------------ | ------------------------ |
+| LLM        | `mistral-small-latest`  | `https://api.mistral.ai/v1`                      | ✅ configurato           |
+| TTS        | `voxtral-mini-tts-2603` | `https://api.mistral.ai/v1/audio/speech`         | ✅ funzionante su device |
+| STT        | `voxtral-mini-latest`   | `https://api.mistral.ai/v1/audio/transcriptions` | ⏳ da integrare          |
 
 ---
 
@@ -20,18 +20,19 @@
 
 ### Specifiche tecniche verificate
 
-| Parametro       | Valore                                                                             |
-| --------------- | ---------------------------------------------------------------------------------- |
-| Modello         | `voxtral-mini-tts-2603`                                                            |
-| API endpoint    | `POST https://api.mistral.ai/v1/audio/speech`                                      |
-| Autenticazione  | `Authorization: Bearer <MISTRAL_API_KEY>`                                          |
-| Formato output  | PCM 24kHz, WAV, MP3, Opus, FLAC, AAC                                               |
-| **PCM 24kHz**   | ✅ Nativo — zero conversione per pipeline xiaozhi                                  |
-| Risposta        | ✅ **Binario diretto** — NON JSON con `audio_data` base64 (nota 26-mar era errata) |
-| Preset italiani | ❌ Non esistono — `it_female` → 404. Serve voice cloning con `voice_id` UUID       |
-| Latenza API     | ~1.2s per frase breve (misurata in test reale)                                     |
-| Costo           | $0.016 / 1k chars (vs ElevenLabs ~$0.30/min ≈ 99% risparmio)                       |
-| EU              | ✅ Parigi (OPCORE)                                                                 |
+| Parametro       | Valore                                                                                                                                    |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Modello         | `voxtral-mini-tts-2603`                                                                                                                   |
+| API endpoint    | `POST https://api.mistral.ai/v1/audio/speech`                                                                                             |
+| Autenticazione  | `Authorization: Bearer <MISTRAL_API_KEY>`                                                                                                 |
+| Formato output  | PCM 24kHz, WAV, MP3, Opus, FLAC, AAC                                                                                                      |
+| **PCM 24kHz**   | ✅ Nativo — zero conversione per pipeline xiaozhi                                                                                         |
+| Risposta        | ⚠️ **JSON** `{"audio_data":"<base64>"}` — la nota 26-mar era CORRETTA. Test curl con `--output` ingannava perché scriveva il JSON grezzo. |
+| Formato PCM     | **float32 LE** (confermato da docs.mistral.ai) — va convertito a int16 LE                                                                 |
+| Preset italiani | ❌ Non esistono — `it_female` → 404. Serve voice cloning con `voice_id` UUID                                                              |
+| Latenza API     | ~1.2s per frase breve (misurata in test reale)                                                                                            |
+| Costo           | $0.016 / 1k chars (vs ElevenLabs ~$0.30/min ≈ 99% risparmio)                                                                              |
+| EU              | ✅ Parigi (OPCORE)                                                                                                                        |
 
 ### Formato request corretto
 
@@ -44,8 +45,9 @@
 }
 ```
 
-> ⚠️ `voice_id` (non `voice`) — questo è l'unico campo non OpenAI-compatible.
-> La risposta è binario PCM diretto, non JSON. `arrayBuffer()` funziona as-is.
+> ⚠️ `voice_id` (non `voice`) — non OpenAI-compatible.
+> La risposta è JSON `{"audio_data":"<base64>"}` — va parsata e decodificata.
+> Il base64 contiene float32 LE — va convertito a int16 LE prima di Opus encode.
 
 ### Voce italiana creata
 
@@ -71,19 +73,36 @@ curl -X POST https://api.mistral.ai/v1/audio/voices \
 
 ---
 
-## Fix implementato in OpenClaw
+## Fix implementati (branch feat/voxtral-tts)
 
-**File**: `src/tts/tts-core.ts` — funzione `openaiTTS()` (commit `91b9778ef`)
+### 1. `src/tts/tts-core.ts` — voice_id UUID (commit `91b9778ef`)
 
-Quando il campo `voice` è un UUID (36 chars hex+dash) E si usa un custom endpoint,
-invia `voice_id` invece di `voice`. Backward-compatible: endpoint OpenAI standard ignorano `voice_id`.
+Quando `voice` è un UUID e si usa custom endpoint → invia `voice_id` invece di `voice`.
 
 ```typescript
-// Voxtral (Mistral) uses voice_id (UUID); standard OpenAI-compatible endpoints use voice
 ...(isCustomOpenAIEndpoint() && /^[0-9a-f-]{36}$/i.test(voice)
   ? { voice_id: voice }
   : { voice }),
 ```
+
+### 2. `extensions/xiaozhi/src/audio-pipeline.ts` — pipeline Voxtral (commit `0dd01801c`)
+
+Pipeline completa per gestire la risposta Voxtral:
+
+```
+JSON {"audio_data":"<base64>"}
+  → base64 decode → float32 LE buffer
+  → float32→int16 LE conversion
+  → resamplePcm (sampleRate=24000, no-op)
+  → normalizePcm (peak cap)
+  → Opus encode → device
+```
+
+Funzioni aggiunte in `audio-pipeline.ts`:
+
+- `maybeUnwrapVoxtralResponse(buf)` — se OPENAI_TTS_BASE_URL contiene "mistral" e buf inizia con `{`, parsa JSON e decodifica base64
+- `maybeFloat32ToInt16(buf)` — se OPENAI_TTS_BASE_URL contiene "mistral", converte float32 LE → int16 LE
+- `normalizePcm`: aggiunto `Math.floor` per buffer con byte count dispari (commit `56cc9a937`)
 
 ---
 

@@ -1,6 +1,8 @@
 # Ottimizzazioni Post-MVP — LaraGoci / XiaoZhi BOX-3
 
 > Data: 2026-03-26 — Aggiornato: 2026-03-29 — Stato: P0 ✅, P1a ✅, P1b parziale ✅, P1c da fare
+>
+> **Stack target aggiornato**: Groq STT + Mistral LLM + Voxtral TTS — stack EU massimale (Groq US ma GDPR-ok con ZDR)
 
 ---
 
@@ -118,9 +120,18 @@ STACK ATTUALE (2026-03-29):
   TTS: OpenAI TTS (batch, da migrare ElevenLabs)
   Latenza misurata: 3.6-5.1s (trace JSONL)
 
-PROSSIMA SESSIONE:
-  → P1c: streaming TTS — onPartialReply → sentence buffer → speakChunk
+PROSSIMA SESSIONE (ordine fisso — migrazioni prima, streaming dopo):
+  → Step 1: Voxtral TTS  — OPENAI_TTS_BASE_URL + config (0 codice, ~30 min)
+  → Step 2: Mistral LLM  — openclaw config set agent.model mistral/... (~10 min)
+  → Step 3: verifica qualità + latenza stack completo sul device
+  → Step 4: P1c streaming TTS — onPartialReply → sentence buffer → speakChunk
   → Target latenza percepita: ~700ms al primo audio
+
+MOTIVAZIONE ORDINE:
+  - Tutte le migrazioni provider prima del codice P1c
+  - P1c sentence splitter dipende dal formato risposte LLM — stabile solo dopo migrazione
+  - Sovranità EU priorità: Mistral LLM + Voxtral TTS = 2/3 componenti EU
+  - Groq STT: US ma GDPR-ok (ZDR attivo + DPA) — futuro upgrade Scaleway Whisper
 
 POST-MVP (vedi TO_DO.md):
   → T1: Gemini context caching esplicito (cacheRead sempre 0 = $0.09/call)

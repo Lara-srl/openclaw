@@ -293,8 +293,20 @@ export class AudioPipeline {
       return;
     }
 
+    // Debug: log first bytes to detect float32 vs int16 from Voxtral
+    const raw = result.audioBuffer;
+    const hex = Array.from(raw.slice(0, 8))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join(" ");
+    const asFloat = raw.length >= 4 ? raw.readFloatLE(0).toFixed(4) : "n/a";
+    const asInt16 = raw.length >= 2 ? raw.readInt16LE(0) : "n/a";
+    console.log(
+      `[XZ 2.5] TTS raw: ${raw.length}b sampleRate=${result.sampleRate} hex=[${hex}] asFloat32[0]=${asFloat} asInt16[0]=${asInt16}`,
+    );
+    // Voxtral returns JSON {"audio_data":"<base64>"} — unwrap first
+    const pcmRaw = maybeUnwrapVoxtralResponse(result.audioBuffer);
     // Convert float32→int16 if provider returns float32 (e.g. Voxtral)
-    const pcmInt16 = maybeFloat32ToInt16(result.audioBuffer);
+    const pcmInt16 = maybeFloat32ToInt16(pcmRaw);
     // Resample to 24kHz if TTS provider returned a different rate
     const pcmResampled = resamplePcm(pcmInt16, result.sampleRate, DOWNLOAD_RATE);
     const pcm24k = normalizePcm(pcmResampled, 0.85); // cap peaks at ~-1.4 dBFS
@@ -531,6 +543,26 @@ async function whisperTranscribe(wav: Buffer, apiKey: string): Promise<string | 
 
   const json = (await res.json()) as { text?: string };
   return json.text ?? null;
+}
+
+// ─── Voxtral JSON unwrap ──────────────────────────────────────────────────────
+
+/**
+ * Voxtral non-streaming endpoint returns JSON: {"audio_data": "<base64>"}.
+ * Unwrap and decode to raw bytes before any PCM processing.
+ * No-op for all other endpoints (binary response).
+ */
+function maybeUnwrapVoxtralResponse(buf: Buffer): Buffer {
+  const baseUrl = (process.env.OPENAI_TTS_BASE_URL ?? "").toLowerCase();
+  if (!baseUrl.includes("mistral")) return buf;
+  if (buf[0] !== 0x7b) return buf; // not JSON
+  try {
+    const json = JSON.parse(buf.toString("utf8")) as { audio_data?: string };
+    if (json.audio_data) return Buffer.from(json.audio_data, "base64");
+  } catch {
+    // not valid JSON, return as-is
+  }
+  return buf;
 }
 
 // ─── Float32→Int16 converter ─────────────────────────────────────────────────

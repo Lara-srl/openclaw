@@ -191,35 +191,35 @@ export class AudioPipeline {
 
       if (gen !== this.generation) return;
 
-      // 2.3 — Groq Whisper STT
-      const apiKey = process.env.GROQ_API_KEY;
-      if (!apiKey) {
-        console.warn("[XZ 2.3] Groq STT: GROQ_API_KEY not set — silent ack");
+      // 2.3 — Voxtral STT (Mistral EU)
+      const sttApiKey = process.env.MISTRAL_API_KEY;
+      if (!sttApiKey) {
+        console.warn("[XZ 2.3] Voxtral STT: MISTRAL_API_KEY not set — silent ack");
         this.silentAck();
         return;
       }
       if (pcm16k.length === 0) {
-        console.warn("[XZ 2.3] Groq STT: 0 bytes PCM — silent ack");
+        console.warn("[XZ 2.3] Voxtral STT: 0 bytes PCM — silent ack");
         this.silentAck();
         return;
       }
 
       const wav = buildWav(pcm16k, UPLOAD_RATE, 1);
-      console.log(`[XZ 2.3] Groq STT: invio ${wav.length} bytes WAV...`);
+      console.log(`[XZ 2.3] Voxtral STT: invio ${wav.length} bytes WAV...`);
       const sttT0 = Date.now();
       let text: string | null;
       try {
-        text = await whisperTranscribe(wav, apiKey);
+        text = await whisperTranscribe(wav, sttApiKey);
       } catch (err) {
-        console.error("[XZ 2.3] Groq STT: ERROR:", err);
+        console.error("[XZ 2.3] Voxtral STT: ERROR:", err);
         this.silentAck();
         return;
       }
       const sttMs = Date.now() - sttT0;
       console.log(
         text?.trim()
-          ? `[XZ 2.3] Groq STT: "${text}" (${sttMs}ms)`
-          : `[XZ 2.3] Groq STT: null — silenzio (${sttMs}ms)`,
+          ? `[XZ 2.3] Voxtral STT: "${text}" (${sttMs}ms)`
+          : `[XZ 2.3] Voxtral STT: null — silenzio (${sttMs}ms)`,
       );
 
       if (gen !== this.generation) return;
@@ -516,23 +516,23 @@ function buildWav(pcm: Buffer, sampleRate: number, channels: number): Buffer {
 async function whisperTranscribe(wav: Buffer, apiKey: string): Promise<string | null> {
   const form = new FormData();
   form.append("file", new Blob([wav], { type: "audio/wav" }), "audio.wav");
-  form.append("model", "whisper-large-v3-turbo");
-  // No language lock — let Whisper auto-detect (supports multilingual use)
+  form.append("model", "voxtral-mini-latest");
+  form.append("language", "it");
 
   let res: Response;
   try {
-    res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+    res = await fetch("https://api.mistral.ai/v1/audio/transcriptions", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}` },
       body: form,
     });
   } catch (err) {
-    console.error("[xiaozhi] Groq STT fetch error:", err);
+    console.error("[xiaozhi] Voxtral STT fetch error:", err);
     return null;
   }
 
   if (!res.ok) {
-    console.error(`[xiaozhi] Whisper HTTP ${res.status}:`, await res.text());
+    console.error(`[xiaozhi] Voxtral STT HTTP ${res.status}:`, await res.text());
     return null;
   }
 

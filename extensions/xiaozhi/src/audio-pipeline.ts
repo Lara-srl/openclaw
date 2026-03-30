@@ -293,16 +293,6 @@ export class AudioPipeline {
       return;
     }
 
-    // Debug: log first bytes to detect float32 vs int16 from Voxtral
-    const raw = result.audioBuffer;
-    const hex = Array.from(raw.slice(0, 8))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join(" ");
-    const asFloat = raw.length >= 4 ? raw.readFloatLE(0).toFixed(4) : "n/a";
-    const asInt16 = raw.length >= 2 ? raw.readInt16LE(0) : "n/a";
-    console.log(
-      `[XZ 2.5] TTS raw: ${raw.length}b sampleRate=${result.sampleRate} hex=[${hex}] asFloat32[0]=${asFloat} asInt16[0]=${asInt16}`,
-    );
     // Voxtral returns JSON {"audio_data":"<base64>"} — unwrap first
     const pcmRaw = maybeUnwrapVoxtralResponse(result.audioBuffer);
     // Convert float32→int16 if provider returns float32 (e.g. Voxtral)

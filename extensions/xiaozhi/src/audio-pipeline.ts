@@ -241,9 +241,13 @@ export class AudioPipeline {
       const speakQueue: string[] = [];
       let agentDone = false;
       let sentBuf = ""; // tokens not yet flushed as a sentence
+      // onPartialReply sends cumulative text (not delta) — track last length to compute delta.
+      let lastPartialLen = 0;
 
-      const agentPromise = this.runAgent(text, (token) => {
-        sentBuf += token;
+      const agentPromise = this.runAgent(text, (cumulativeText) => {
+        const delta = cumulativeText.slice(lastPartialLen);
+        lastPartialLen = cumulativeText.length;
+        sentBuf += delta;
         const { sentences, remainder } = extractSentences(sentBuf);
         sentBuf = remainder;
         speakQueue.push(...sentences);

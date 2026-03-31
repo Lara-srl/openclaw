@@ -232,27 +232,84 @@ export class AudioPipeline {
       // Show transcription on device screen
       this.sendJson(buildStt(text));
 
-      // 2.4 — Agent command
-      console.log(`[XZ 2.4] Agent: input="${text}"`);
-      const response = await this.runAgent(text);
-      console.log(
-        response?.trim()
-          ? `[XZ 2.4] Agent: risposta="${response}" (${response.length} chars)`
-          : `[XZ 2.4] Agent: null`,
-      );
+      // 2.4 + 2.5 + 2.6 — P1C streaming: Agent tokens → sentence splitter → TTS → Opus → device
+      console.log(`[XZ 2.4] Agent streaming: input="${text}"`);
+      const t0 = Date.now();
+
+      // Producer: onPartialReply pushes complete sentences into speakQueue (synchronous, fast).
+      // Consumer (consumeLoop below) runs in parallel and calls speakChunk() per sentence.
+      const speakQueue: string[] = [];
+      let agentDone = false;
+      let sentBuf = ""; // tokens not yet flushed as a sentence
+
+      const agentPromise = this.runAgent(text, (token) => {
+        sentBuf += token;
+        const { sentences, remainder } = extractSentences(sentBuf);
+        sentBuf = remainder;
+        speakQueue.push(...sentences);
+      }).then((response) => {
+        agentDone = true;
+        return response;
+      });
+
+      // Consumer: dequeue and speak sentences as they arrive, then flush remainder.
+      let firstChunk = true;
+      let spokenSomething = false;
+
+      const consumeLoop = async (): Promise<void> => {
+        while (true) {
+          if (gen !== this.generation) return;
+          if (speakQueue.length > 0) {
+            const sentence = speakQueue.shift()!;
+            const ok = await this.speakChunk(sentence, gen, firstChunk);
+            if (ok) {
+              firstChunk = false;
+              spokenSomething = true;
+            }
+          } else if (agentDone) {
+            break;
+          } else {
+            // Brief yield while waiting for more tokens from LLM
+            await new Promise<void>((r) => setTimeout(r, 10));
+          }
+        }
+      };
+
+      const [response] = await Promise.all([agentPromise, consumeLoop()]);
 
       if (gen !== this.generation) return;
 
-      if (!response?.trim()) {
+      // Flush any remainder (last partial sentence not ended with punctuation)
+      const remainderText = sentBuf.trim();
+      if (remainderText) {
+        const ok = await this.speakChunk(remainderText, gen, firstChunk);
+        if (ok) {
+          firstChunk = false;
+          spokenSomething = true;
+        }
+      }
+
+      if (gen !== this.generation) return;
+
+      console.log(
+        response?.trim()
+          ? `[XZ 2.4] Agent: risposta="${response}" (${response.length} chars, ${Date.now() - t0}ms)`
+          : `[XZ 2.4] Agent: null`,
+      );
+
+      if (!spokenSomething) {
         this.silentAck();
         return;
       }
 
-      // 2.7 — Emotion/emoji display before TTS
-      this.sendJson(buildLlm(response, "happy"));
+      // 2.7 — Emotion/text display on device screen (sent after voice, full response available)
+      if (response?.trim()) {
+        this.sendJson(buildLlm(response, "happy"));
+      }
 
-      // 2.5 + 2.6 — TTS → Opus encode → rate-controlled playback
-      await this.speak(response, gen);
+      this.sendJson(buildTts("stop"));
+      this.state = "idle";
+      // device will automatically send listen:start (dialog mode)
     } catch (err) {
       console.error("[xiaozhi] pipeline error:", err);
       if (gen === this.generation) {
@@ -268,11 +325,15 @@ export class AudioPipeline {
     this.state = "idle";
   }
 
-  private async speak(text: string, gen: number): Promise<void> {
-    if (gen !== this.generation) return;
+  /**
+   * P1C: TTS a single sentence chunk, encode to Opus and send rate-controlled.
+   * Returns true if all frames were sent successfully with this generation.
+   * isFirst=true → sends tts:start and transitions state to "speaking".
+   */
+  private async speakChunk(text: string, gen: number, isFirst: boolean): Promise<boolean> {
+    if (gen !== this.generation || !text.trim()) return false;
 
-    // 2.5 — TTS → PCM via core runtime
-    console.log(`[XZ 2.5] TTS: richiedo audio...`);
+    console.log(`[XZ 2.5] TTS chunk (${text.length} chars): "${text.slice(0, 60)}"`);
     let result: Awaited<ReturnType<typeof this.deps.runtime.tts.textToSpeechTelephony>>;
     try {
       result = await this.deps.runtime.tts.textToSpeechTelephony({
@@ -280,17 +341,15 @@ export class AudioPipeline {
         cfg: this.deps.config,
       });
     } catch (err) {
-      console.error("[XZ 2.5] TTS: ERROR (exception):", err);
-      this.silentAck();
-      return;
+      console.error("[XZ 2.5] TTS chunk ERROR:", err);
+      return false;
     }
 
-    if (gen !== this.generation) return;
+    if (gen !== this.generation) return false;
 
     if (!result.success || !result.audioBuffer || !result.sampleRate) {
-      console.error("[XZ 2.5] TTS: ERROR (failed):", result.error);
-      this.silentAck();
-      return;
+      console.error("[XZ 2.5] TTS chunk FAILED:", result.error);
+      return false;
     }
 
     // Voxtral returns JSON {"audio_data":"<base64>"} — unwrap first
@@ -305,12 +364,8 @@ export class AudioPipeline {
       Math.max(0.1, parseFloat(process.env.XIAOZHI_TTS_GAIN ?? "0.85")),
     );
     const pcm24k = normalizePcm(pcmResampled, ttsGain);
-    console.log(
-      `[XZ 2.5] TTS: ${result.audioBuffer.length} bytes raw → ${pcm24k.length} bytes PCM 24kHz`,
-    );
 
-    // Reset encoder state so previous TTS call's predictor doesn't bleed into
-    // this stream and cause chirp/click artifacts at phoneme boundaries.
+    // Reset encoder state between chunks to avoid Opus predictor bleed/chirp artifacts.
     this.encoder.applyEncoderCTL(OPUS_RESET_STATE_REQUEST, 0);
 
     // Encode PCM → Opus frames (60ms each)
@@ -328,35 +383,30 @@ export class AudioPipeline {
         console.error("[XZ 2.5] Opus encode frame error:", err);
       }
     }
-    console.log(`[XZ 2.5] Opus encode: ${opusFrames.length} frames`);
 
-    if (gen !== this.generation || opusFrames.length === 0) {
-      if (gen === this.generation) this.silentAck();
-      return;
-    }
+    if (gen !== this.generation || opusFrames.length === 0) return false;
 
-    // B9: WS already closed (B8 disconnect) — hand frames to bridge for next reconnect
+    // B9: WS closed — queue first chunk frames for next reconnect, skip subsequent chunks.
     if (this.ws.readyState !== this.ws.OPEN) {
-      console.log(`[XZ B9] WS closed — queuing ${opusFrames.length} TTS frames for next reconnect`);
-      this.onTtsReady?.(opusFrames);
+      if (isFirst) {
+        console.log(`[XZ B9] WS closed — queuing ${opusFrames.length} TTS frames for reconnect`);
+        this.onTtsReady?.(opusFrames);
+      }
       this.state = "idle";
-      return;
+      return false;
     }
 
-    // 2.6 — Rate-controlled playback
-    this.state = "speaking";
-    this.sendJson(buildTts("start"));
-    this.sendJson(buildTts("sentence_start", text));
+    // First chunk: transition to speaking state and open TTS stream on device.
+    if (isFirst) {
+      this.state = "speaking";
+      this.sendJson(buildTts("start"));
+    }
 
-    console.log(`[XZ 2.6] Rate-ctrl: invio ${opusFrames.length} frames a ${FRAME_MS}ms/frame`);
+    this.sendJson(buildTts("sentence_start", text));
+    console.log(`[XZ 2.6] Rate-ctrl chunk: ${opusFrames.length} frames`);
     await this.sendFramesRateControlled(opusFrames, gen);
 
-    if (gen === this.generation) {
-      console.log(`[XZ 2.6] Rate-ctrl: DONE`);
-      this.sendJson(buildTts("stop"));
-      this.state = "idle";
-      // device will automatically send listen:start (dialog mode)
-    }
+    return gen === this.generation;
   }
 
   /** Send Opus frames one at a time, one per FRAME_MS.
@@ -393,7 +443,11 @@ export class AudioPipeline {
 
   // ─── Agent ───────────────────────────────────────────────────────────────────
 
-  private async runAgent(text: string): Promise<string | null> {
+  /**
+   * Runs the embedded agent. onToken (optional) is called synchronously with
+   * each partial-reply delta as the LLM streams tokens — used for P1C streaming TTS.
+   */
+  private async runAgent(text: string, onToken?: (token: string) => void): Promise<string | null> {
     let deps: Awaited<ReturnType<typeof loadCoreAgentDeps>>;
     try {
       deps = await loadCoreAgentDeps();
@@ -450,6 +504,12 @@ export class AudioPipeline {
         lane: "xiaozhi",
         agentDir,
         extraSystemPrompt: VOICE_EXTRA_SYSTEM_PROMPT,
+        // P1C: fire-and-forget partial reply tokens into caller's buffer
+        onPartialReply: onToken
+          ? (payload) => {
+              if (payload.text) onToken(payload.text);
+            }
+          : undefined,
       });
 
       const texts = (result.payloads ?? [])
@@ -515,7 +575,7 @@ function buildWav(pcm: Buffer, sampleRate: number, channels: number): Buffer {
 
 async function whisperTranscribe(wav: Buffer, apiKey: string): Promise<string | null> {
   const form = new FormData();
-  form.append("file", new Blob([wav], { type: "audio/wav" }), "audio.wav");
+  form.append("file", new Blob([new Uint8Array(wav)], { type: "audio/wav" }), "audio.wav");
   form.append("model", "voxtral-mini-latest");
   form.append("language", "it");
 
@@ -601,6 +661,34 @@ function normalizePcm(pcm: Buffer, targetPeak = 0.707): Buffer {
     out.writeInt16LE(sample, i * BYTES_PER_SAMPLE);
   }
   return out;
+}
+
+// ─── Sentence splitter ────────────────────────────────────────────────────────
+
+/**
+ * Extracts complete sentences from a growing token buffer.
+ * Splits on sentence-ending punctuation (. ! ?) followed by whitespace/end, or newlines.
+ * Sentences shorter than minLen chars are merged into the next one to avoid
+ * excessive TTS micro-calls (e.g. "Sì!" alone would be wasteful).
+ * Returns extracted sentences and the unprocessed remainder for the next call.
+ */
+function extractSentences(text: string, minLen = 20): { sentences: string[]; remainder: string } {
+  const sentences: string[] = [];
+  // Find all sentence-boundary end positions
+  const re = /[.!?]+(?:\s+|$)|\n+/g;
+  let start = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const end = m.index + m[0].length;
+    const sentence = text.slice(start, end).trim();
+    if (sentence.length >= minLen) {
+      sentences.push(sentence);
+      start = end;
+    }
+    // If too short, don't advance start: next boundary will merge this fragment
+    // with subsequent text, producing a longer combined sentence.
+  }
+  return { sentences, remainder: text.slice(start) };
 }
 
 // ─── PCM resampler (linear interpolation) ─────────────────────────────────────

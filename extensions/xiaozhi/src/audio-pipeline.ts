@@ -24,6 +24,19 @@ const VOICE_EXTRA_SYSTEM_PROMPT = `MODALITÀ VOCALE — priorità assoluta su tu
 - MAI premesse, intro o recap — vai diretto alla risposta
 - Tono conversazionale naturale, come se stessi parlando ad alta voce`;
 
+/** Builds the extra system prompt with current date/time injected at runtime. */
+function buildExtraSystemPrompt(): string {
+  const now = new Date().toLocaleString("it-IT", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `Data e ora attuale: ${now}\n\n${VOICE_EXTRA_SYSTEM_PROMPT}`;
+}
+
 /** JSONL trace log for debugging LLM input/output — /tmp, non persistente */
 const LLM_TRACE_FILE = "/tmp/xiaozhi-llm-trace.jsonl";
 
@@ -507,7 +520,7 @@ export class AudioPipeline {
         runId,
         lane: "xiaozhi",
         agentDir,
-        extraSystemPrompt: VOICE_EXTRA_SYSTEM_PROMPT,
+        extraSystemPrompt: buildExtraSystemPrompt(),
         // P1C: fire-and-forget partial reply tokens into caller's buffer
         onPartialReply: onToken
           ? (payload) => {

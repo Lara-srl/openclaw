@@ -31,6 +31,9 @@ export XIAOZHI_TTS_GAIN=0.85
 
 ### `~/.openclaw/openclaw.json` (sezione rilevante)
 
+voce francesco "10e8fb02-3a0a-4b93-81c2-32bd37b7d6a4"
+voce donna librox d49d2eb9-2178-4fa6-880b-76b4d4a4fab5
+
 ```json
 {
   "agents": {

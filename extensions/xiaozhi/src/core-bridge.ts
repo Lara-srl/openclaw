@@ -41,6 +41,8 @@ export type CoreAgentDeps = {
     lane?: string;
     extraSystemPrompt?: string;
     agentDir?: string;
+    /** P1C streaming: called (fire-and-forget) with each partial LLM text delta. */
+    onPartialReply?: (payload: { text?: string }) => void;
   }) => Promise<{
     payloads?: Array<{ text?: string; isError?: boolean }>;
     meta?: { aborted?: boolean };

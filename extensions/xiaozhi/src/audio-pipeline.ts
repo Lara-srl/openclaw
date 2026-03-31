@@ -245,15 +245,15 @@ export class AudioPipeline {
       // Show transcription on device screen
       this.sendJson(buildStt(text));
 
-      // 2.4 + 2.5 + 2.6 — P1C streaming: Agent tokens → sentence splitter → TTS → Opus → device
+      // 2.4 + 2.5 + 2.6 — P1C streaming + prefetch: Agent tokens → sentence splitter → TTS → Opus → device
       console.log(`[XZ 2.4] Agent streaming: input="${text}"`);
       const t0 = Date.now();
 
       // Producer: onPartialReply pushes complete sentences into speakQueue (synchronous, fast).
-      // Consumer (consumeLoop below) runs in parallel and calls speakChunk() per sentence.
+      // Consumer (consumeLoop below) uses 1-ahead TTS prefetch to overlap network wait with send.
       const speakQueue: string[] = [];
       let agentDone = false;
-      let sentBuf = ""; // tokens not yet flushed as a sentence
+      let sentBuf = "";
       // onPartialReply sends cumulative text (not delta) — track last length to compute delta.
       let lastPartialLen = 0;
 
@@ -265,46 +265,61 @@ export class AudioPipeline {
         sentBuf = remainder;
         speakQueue.push(...sentences);
       }).then((response) => {
+        // Flush remainder into queue before marking done — consumeLoop handles it.
+        const remainderText = sentBuf.trim();
+        if (remainderText) speakQueue.push(remainderText);
+        sentBuf = "";
         agentDone = true;
         return response;
       });
 
-      // Consumer: dequeue and speak sentences as they arrive, then flush remainder.
+      // Consumer with 1-ahead TTS prefetch:
+      // While sending chunk N (rate-controlled, takes audio_duration ms),
+      // TTS for chunk N+1 runs concurrently → zero inter-chunk TTS wait.
       let firstChunk = true;
       let spokenSomething = false;
 
+      let nextFetch: { text: string; promise: Promise<{ frames: Buffer[] } | null> } | null = null;
+
+      // Start TTS for the next queued sentence unless a prefetch is already in flight.
+      const kickPrefetch = (): void => {
+        if (nextFetch !== null || speakQueue.length === 0) return;
+        const t = speakQueue.shift()!;
+        nextFetch = { text: t, promise: this.fetchAndEncodeChunk(t, gen) };
+      };
+
       const consumeLoop = async (): Promise<void> => {
+        kickPrefetch();
         while (true) {
           if (gen !== this.generation) return;
-          if (speakQueue.length > 0) {
-            const sentence = speakQueue.shift()!;
-            const ok = await this.speakChunk(sentence, gen, firstChunk);
+          if (nextFetch === null) {
+            if (agentDone && speakQueue.length === 0) break;
+            await new Promise<void>((r) => setTimeout(r, 10));
+            kickPrefetch();
+            continue;
+          }
+          const { text: chunkText, promise } = nextFetch;
+          nextFetch = null;
+          // Start TTS for next sentence before awaiting current — runs concurrently.
+          kickPrefetch();
+          const encoded = await promise;
+          if (gen !== this.generation) return;
+          // Kick again: more sentences may have arrived during TTS wait.
+          kickPrefetch();
+          if (encoded) {
+            // Send takes audio_duration ms; next TTS prefetch runs concurrently.
+            const ok = await this.sendPrefetchedChunk(encoded, chunkText, gen, firstChunk);
             if (ok) {
               firstChunk = false;
               spokenSomething = true;
             }
-          } else if (agentDone) {
-            break;
-          } else {
-            // Brief yield while waiting for more tokens from LLM
-            await new Promise<void>((r) => setTimeout(r, 10));
           }
+          // Kick again: more sentences may have arrived during rate-controlled send.
+          kickPrefetch();
         }
       };
 
       const [response] = await Promise.all([agentPromise, consumeLoop()]);
-
-      if (gen !== this.generation) return;
-
-      // Flush any remainder (last partial sentence not ended with punctuation)
-      const remainderText = sentBuf.trim();
-      if (remainderText) {
-        const ok = await this.speakChunk(remainderText, gen, firstChunk);
-        if (ok) {
-          firstChunk = false;
-          spokenSomething = true;
-        }
-      }
 
       if (gen !== this.generation) return;
 
@@ -343,14 +358,17 @@ export class AudioPipeline {
   }
 
   /**
-   * P1C: TTS a single sentence chunk, encode to Opus and send rate-controlled.
-   * Returns true if all frames were sent successfully with this generation.
-   * isFirst=true → sends tts:start and transitions state to "speaking".
+   * Prefetch Phase 1 — TTS + PCM processing + Opus encode.
+   * Pure compute: no WS sends. Designed to run concurrently with sendPrefetchedChunk
+   * for the previous chunk to eliminate inter-sentence TTS latency (1-ahead prefetch).
    */
-  private async speakChunk(text: string, gen: number, isFirst: boolean): Promise<boolean> {
-    if (gen !== this.generation || !text.trim()) return false;
+  private async fetchAndEncodeChunk(
+    text: string,
+    gen: number,
+  ): Promise<{ frames: Buffer[] } | null> {
+    if (gen !== this.generation || !text.trim()) return null;
 
-    console.log(`[XZ 2.5] TTS chunk (${text.length} chars): "${text.slice(0, 60)}"`);
+    console.log(`[XZ 2.5] TTS prefetch (${text.length} chars): "${text.slice(0, 60)}"`);
     let result: Awaited<ReturnType<typeof this.deps.runtime.tts.textToSpeechTelephony>>;
     try {
       result = await this.deps.runtime.tts.textToSpeechTelephony({
@@ -358,15 +376,15 @@ export class AudioPipeline {
         cfg: this.deps.config,
       });
     } catch (err) {
-      console.error("[XZ 2.5] TTS chunk ERROR:", err);
-      return false;
+      console.error("[XZ 2.5] TTS prefetch ERROR:", err);
+      return null;
     }
 
-    if (gen !== this.generation) return false;
+    if (gen !== this.generation) return null;
 
     if (!result.success || !result.audioBuffer || !result.sampleRate) {
-      console.error("[XZ 2.5] TTS chunk FAILED:", result.error);
-      return false;
+      console.error("[XZ 2.5] TTS prefetch FAILED:", result.error);
+      return null;
     }
 
     // Voxtral returns JSON {"audio_data":"<base64>"} — unwrap first
@@ -382,11 +400,11 @@ export class AudioPipeline {
     );
     const pcm24k = normalizePcm(pcmResampled, ttsGain);
 
-    // Reset encoder state between chunks to avoid Opus predictor bleed/chirp artifacts.
+    // Reset encoder state per chunk to avoid Opus predictor bleed/chirp artifacts.
     this.encoder.applyEncoderCTL(OPUS_RESET_STATE_REQUEST, 0);
 
     // Encode PCM → Opus frames (60ms each)
-    const opusFrames: Buffer[] = [];
+    const frames: Buffer[] = [];
     for (let i = 0; i < pcm24k.length; i += DOWNLOAD_FRAME_BYTES) {
       const chunk = pcm24k.subarray(i, i + DOWNLOAD_FRAME_BYTES);
       // Pad last frame to exactly 60ms
@@ -395,19 +413,34 @@ export class AudioPipeline {
           ? Buffer.concat([chunk, Buffer.alloc(DOWNLOAD_FRAME_BYTES - chunk.length)])
           : chunk;
       try {
-        opusFrames.push(this.encoder.encode(padded));
+        frames.push(this.encoder.encode(padded));
       } catch (err) {
         console.error("[XZ 2.5] Opus encode frame error:", err);
       }
     }
 
-    if (gen !== this.generation || opusFrames.length === 0) return false;
+    if (gen !== this.generation || frames.length === 0) return null;
+
+    return { frames };
+  }
+
+  /**
+   * Prefetch Phase 2 — send pre-encoded Opus frames to device (rate-controlled).
+   * Handles B9 (WS closed during send), state transition to "speaking", tts:start/sentence_start.
+   */
+  private async sendPrefetchedChunk(
+    chunk: { frames: Buffer[] },
+    text: string,
+    gen: number,
+    isFirst: boolean,
+  ): Promise<boolean> {
+    if (gen !== this.generation) return false;
 
     // B9: WS closed — queue first chunk frames for next reconnect, skip subsequent chunks.
     if (this.ws.readyState !== this.ws.OPEN) {
       if (isFirst) {
-        console.log(`[XZ B9] WS closed — queuing ${opusFrames.length} TTS frames for reconnect`);
-        this.onTtsReady?.(opusFrames);
+        console.log(`[XZ B9] WS closed — queuing ${chunk.frames.length} TTS frames for reconnect`);
+        this.onTtsReady?.(chunk.frames);
       }
       this.state = "idle";
       return false;
@@ -420,8 +453,8 @@ export class AudioPipeline {
     }
 
     this.sendJson(buildTts("sentence_start", text));
-    console.log(`[XZ 2.6] Rate-ctrl chunk: ${opusFrames.length} frames`);
-    await this.sendFramesRateControlled(opusFrames, gen);
+    console.log(`[XZ 2.6] Rate-ctrl chunk: ${chunk.frames.length} frames`);
+    await this.sendFramesRateControlled(chunk.frames, gen);
 
     return gen === this.generation;
   }

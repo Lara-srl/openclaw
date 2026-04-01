@@ -33,6 +33,8 @@ export XIAOZHI_TTS_GAIN=0.85
 
 voce francesco "10e8fb02-3a0a-4b93-81c2-32bd37b7d6a4"
 voce donna librox d49d2eb9-2178-4fa6-880b-76b4d4a4fab5
+francia fr_marie_sad, fr_marie_neutral
+studio : c2b553b2-9e48-43f0-a957-58febfbd5141
 
 ```json
 {

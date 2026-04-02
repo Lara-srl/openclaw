@@ -19,10 +19,11 @@ import { buildLlm, buildStt, buildTts } from "./protocol.js";
 /** Injected as extraSystemPrompt in every voice agent call.
  *  Keeps voice-specific rules in one place; takes priority over workspace files. */
 const VOICE_EXTRA_SYSTEM_PROMPT = `MODALITÀ VOCALE — priorità assoluta su tutto il resto:
-- La lunghezza della risposta dipende dalla domanda: domanda semplice → 1-2 frasi; domanda complessa → quanto serve, max 6-7 frasi
-- MAI markdown, emoji, elenchi puntati o numerati — parla sempre in prosa fluente
-- MAI premesse, intro o recap — vai diretto alla risposta
-- Tono conversazionale naturale, come se stessi parlando ad alta voce`;
+- Domanda semplice → 1-2 frasi. Domanda complessa → max 4-5 frasi.
+- VIETATO usare markdown: niente **, *, \`, #, elenchi con - o numeri. Rispondi SOLO in prosa fluente.
+- VIETATO premesse, intro o recap — vai diretto alla risposta.
+- Il tuo output viene letto ad alta voce da un sintetizzatore TTS. Scrivi come parleresti.
+- Se non sai qualcosa, dillo in una frase. Non elencare alternative.`;
 
 /** Builds the extra system prompt with current date/time injected at runtime. */
 function buildExtraSystemPrompt(): string {
@@ -54,23 +55,25 @@ type InstantPattern = { re: RegExp; responses: string[] };
 
 const INSTANT_PATTERNS: InstantPattern[] = [
   {
-    re: /^(ciao|hey|ehi|salve|buongiorno|buonasera|buonanotte|ehilà|oh ciao)$/,
+    // "ciao", "ehi ciao", "ciao a tutti", "oh ciao come va"
+    re: /^(ciao|hey|ehi|salve|buongiorno|buonasera|ehilà|oh ciao)(\s|$)/,
     responses: ["Ciao!", "Ehi, ciao!", "Ciao, dimmi tutto!", "Eccomi, dimmi!"],
   },
   {
-    re: /^(grazie|grazie mille|ti ringrazio|perfetto grazie)$/,
+    re: /^(grazie|ti ringrazio|perfetto grazie)/,
     responses: ["Di niente!", "Figurati!", "Prego!", "Non c'è di che!"],
   },
   {
-    re: /^(arrivederci|a dopo|ciao ciao|ci vediamo|buonanotte|a presto|addio)$/,
+    re: /^(arrivederci|ciao ciao|ci vediamo|a presto|a dopo|addio|buonanotte)(\s|$)/,
     responses: ["Ciao, a presto!", "A dopo!", "Ci vediamo!", "Buonanotte!"],
   },
   {
-    re: /^(chi sei|come ti chiami|tu chi sei)$/,
+    // "chi sei", "come ti chiami", "qual è il tuo nome", "come ti chiami qual è il tuo nome"
+    re: /(chi sei|come ti chiami|qual è il tuo nome|il tuo nome)/,
     responses: ["Sono il tuo assistente vocale OpenClaw!", "Sono OpenClaw, il tuo assistente!"],
   },
   {
-    re: /^(come stai|tutto bene|come va)$/,
+    re: /^(come stai|tutto bene|come va)/,
     responses: [
       "Tutto bene, grazie! Tu come stai?",
       "Alla grande! Dimmi come posso aiutarti.",
@@ -78,12 +81,21 @@ const INSTANT_PATTERNS: InstantPattern[] = [
     ],
   },
   {
-    re: /^(che ora è|che ore sono|dimmi lora|lora attuale|ora)$/,
+    // "che ore sono", "che ora è", "dimmi l'ora", "sai l'ora"
+    re: /(che ora è|che ore sono|dimmi lora|lora attuale|sai lora)/,
     responses: [], // dynamic — filled at runtime
   },
   {
-    re: /^(che giorno è|che data è|data di oggi|giorno)$/,
+    re: /(che giorno è|che data è|data di oggi|che giorno è oggi)/,
     responses: [], // dynamic — filled at runtime
+  },
+  {
+    // "che tempo fa", "com'è il meteo", "piove oggi" — no tool meteo disponibile
+    re: /(che tempo fa|meteo|previsioni|piove|pioverà|farà caldo|farà freddo|temperatura fuori)/,
+    responses: [
+      "Non ho accesso al meteo, mi dispiace! Prova a controllare su un'app.",
+      "Purtroppo non posso vedere il meteo. Controlla online!",
+    ],
   },
 ];
 
@@ -93,11 +105,16 @@ const INSTANT_PATTERNS: InstantPattern[] = [
  */
 function routeToInstant(text: string): string | null {
   const norm = normalizeForRouting(text);
+  // Skip instant routing for long inputs — likely complex questions
+  if (norm.split(/\s+/).length > 12) {
+    console.log(`[XZ INSTANT] ⏭ skip (${norm.split(/\s+/).length} words): "${text.slice(0, 60)}"`);
+    return null;
+  }
   for (const pat of INSTANT_PATTERNS) {
     if (!pat.re.test(norm)) continue;
 
     // Dynamic: time
-    if (norm.includes("ora")) {
+    if (norm.includes("ora") || norm.includes("ore")) {
       const time = new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
       const response = `Sono le ${time}.`;
       console.log(`[XZ INSTANT] ✅ MATCH ora: "${text}" → "${response}"`);
@@ -149,6 +166,36 @@ const TOOL_INTENT_KEYWORDS = [
   "sveglia",
   "alarm",
 ];
+
+// ─── TTS text sanitizer ─────────────────────────────────────────────────────
+
+/** Strip markdown/special chars that cause Mistral TTS 500 errors. */
+function sanitizeForTts(text: string): string {
+  return (
+    text
+      // Bold/italic: **text** / *text* / __text__ / _text_
+      .replace(/\*{1,3}([^*]+)\*{1,3}/g, "$1")
+      .replace(/_{1,3}([^_]+)_{1,3}/g, "$1")
+      // Inline code: `text`
+      .replace(/`([^`]+)`/g, "$1")
+      // Markdown headers: ## Header
+      .replace(/^#{1,6}\s+/gm, "")
+      // Markdown list items: - item / * item / 1. item
+      .replace(/^[\s]*[-*]\s+/gm, "")
+      .replace(/^[\s]*\d+\.\s+/gm, "")
+      // Curly/smart quotes → straight
+      .replace(/[""«»]/g, '"')
+      .replace(/['']/g, "'")
+      // Links: [text](url) → text
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      // Stray markdown chars
+      .replace(/[~>`]/g, "")
+      // Collapse multiple spaces/newlines
+      .replace(/\n+/g, " ")
+      .replace(/ {2,}/g, " ")
+      .trim()
+  );
+}
 
 /**
  * Detects tool intent from user text.
@@ -493,13 +540,14 @@ export class AudioPipeline {
     text: string,
     gen: number,
   ): Promise<{ frames: Buffer[] } | null> {
-    if (gen !== this.generation || !text.trim()) return null;
+    const clean = sanitizeForTts(text);
+    if (gen !== this.generation || !clean) return null;
 
-    console.log(`[XZ 2.5] TTS prefetch (${text.length} chars): "${text.slice(0, 60)}"`);
+    console.log(`[XZ 2.5] TTS prefetch (${clean.length} chars): "${clean.slice(0, 60)}"`);
     let result: Awaited<ReturnType<typeof this.deps.runtime.tts.textToSpeechTelephony>>;
     try {
       result = await this.deps.runtime.tts.textToSpeechTelephony({
-        text,
+        text: clean,
         cfg: this.deps.config,
       });
     } catch (err) {

@@ -14,7 +14,7 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
  * - "minimal": Reduced sections (Tooling, Workspace, Runtime) - used for subagents
  * - "none": Just basic identity line, no sections
  */
-export type PromptMode = "full" | "minimal" | "none";
+export type PromptMode = "full" | "minimal" | "none" | "voice";
 type OwnerIdDisplay = "raw" | "hash";
 
 function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
@@ -374,6 +374,7 @@ export function buildAgentSystemPrompt(params: {
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
+  const isVoice = promptMode === "voice";
   const sandboxContainerWorkspace = params.sandboxInfo?.containerWorkspaceDir?.trim();
   const sanitizedWorkspaceDir = sanitizeForPromptLiteral(params.workspaceDir);
   const sanitizedSandboxContainerWorkspace = sandboxContainerWorkspace
@@ -399,13 +400,13 @@ export function buildAgentSystemPrompt(params: {
     readToolName,
   });
   const memorySection = buildMemorySection({
-    isMinimal,
+    isMinimal: isMinimal || isVoice,
     availableTools,
     citationsMode: params.memoryCitationsMode,
   });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
-    isMinimal,
+    isMinimal: isMinimal || isVoice,
     readToolName,
   });
   const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
@@ -472,9 +473,9 @@ export function buildAgentSystemPrompt(params: {
     "",
     ...skillsSection,
     ...memorySection,
-    // Skip self-update for subagent/none modes
-    hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
-    hasGateway && !isMinimal
+    // Skip self-update for subagent/none/voice modes
+    hasGateway && !isMinimal && !isVoice ? "## OpenClaw Self-Update" : "",
+    hasGateway && !isMinimal && !isVoice
       ? [
           "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
           "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
@@ -483,19 +484,19 @@ export function buildAgentSystemPrompt(params: {
           "After restart, OpenClaw pings the last active session automatically.",
         ].join("\n")
       : "",
-    hasGateway && !isMinimal ? "" : "",
+    hasGateway && !isMinimal && !isVoice ? "" : "",
     "",
-    // Skip model aliases for subagent/none modes
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
+    // Skip model aliases for subagent/none/voice modes
+    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal && !isVoice
       ? "## Model Aliases"
       : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
+    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal && !isVoice
       ? "Prefer aliases when specifying model overrides; full provider/model is also accepted."
       : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
+    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal && !isVoice
       ? params.modelAliasLines.join("\n")
       : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
+    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal && !isVoice ? "" : "",
     userTimezone
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
       : "",
@@ -550,23 +551,23 @@ export function buildAgentSystemPrompt(params: {
           .join("\n")
       : "",
     params.sandboxInfo?.enabled ? "" : "",
-    ...buildUserIdentitySection(ownerLine, isMinimal),
+    ...buildUserIdentitySection(ownerLine, isMinimal || isVoice),
     ...buildTimeSection({
       userTimezone,
     }),
     "## Workspace Files (injected)",
     "These user-editable files are loaded by OpenClaw and included below in Project Context.",
     "",
-    ...buildReplyTagsSection(isMinimal),
+    ...buildReplyTagsSection(isMinimal || isVoice),
     ...buildMessagingSection({
-      isMinimal,
+      isMinimal: isMinimal || isVoice,
       availableTools,
       messageChannelOptions,
       inlineButtonsEnabled,
       runtimeChannel,
       messageToolHints: params.messageToolHints,
     }),
-    ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
+    ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }), // keep voice section even in voice mode
   ];
 
   if (extraSystemPrompt) {
@@ -624,8 +625,8 @@ export function buildAgentSystemPrompt(params: {
     }
   }
 
-  // Skip silent replies for subagent/none modes
-  if (!isMinimal) {
+  // Skip silent replies for subagent/none/voice modes
+  if (!isMinimal && !isVoice) {
     lines.push(
       "## Silent Replies",
       `When you have nothing to say, respond with ONLY: ${SILENT_REPLY_TOKEN}`,
@@ -642,8 +643,8 @@ export function buildAgentSystemPrompt(params: {
     );
   }
 
-  // Skip heartbeats for subagent/none modes
-  if (!isMinimal) {
+  // Skip heartbeats for subagent/none/voice modes
+  if (!isMinimal && !isVoice) {
     lines.push(
       "## Heartbeats",
       heartbeatPromptLine,

@@ -174,9 +174,15 @@ export async function resolvePromptBuildHookResult(params: {
   };
 }
 
-export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "full" {
+export function resolvePromptModeForSession(
+  sessionKey?: string,
+  messageProvider?: string,
+): "minimal" | "full" | "voice" {
   if (!sessionKey) {
     return "full";
+  }
+  if (messageProvider === "xiaozhi") {
+    return "voice";
   }
   return isSubagentSessionKey(sessionKey) ? "minimal" : "full";
 }
@@ -468,7 +474,7 @@ export async function runEmbeddedAttempt(
       },
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
-    const promptMode = resolvePromptModeForSession(params.sessionKey);
+    const promptMode = resolvePromptModeForSession(params.sessionKey, params.messageProvider);
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],

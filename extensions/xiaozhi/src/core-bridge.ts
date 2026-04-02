@@ -41,6 +41,8 @@ export type CoreAgentDeps = {
     lane?: string;
     extraSystemPrompt?: string;
     agentDir?: string;
+    /** Disable built-in tools for this run (LLM-only mode). */
+    disableTools?: boolean;
     /** P1C streaming: called (fire-and-forget) with each partial LLM text delta. */
     onPartialReply?: (payload: { text?: string }) => void;
   }) => Promise<{

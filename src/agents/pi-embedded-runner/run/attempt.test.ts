@@ -60,6 +60,18 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession("agent:main:cron:job-1")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:cron:job-1:run:run-abc")).toBe("full");
   });
+
+  it("uses voice mode for xiaozhi messageProvider", () => {
+    expect(resolvePromptModeForSession("main", "xiaozhi")).toBe("voice");
+  });
+
+  it("prefers voice mode over subagent minimal when messageProvider is xiaozhi", () => {
+    expect(resolvePromptModeForSession("agent:main:subagent:child", "xiaozhi")).toBe("voice");
+  });
+
+  it("uses full mode when messageProvider is not xiaozhi", () => {
+    expect(resolvePromptModeForSession("main", "telegram")).toBe("full");
+  });
 });
 
 describe("resolveAttemptFsWorkspaceOnly", () => {

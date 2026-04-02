@@ -40,6 +40,133 @@ function buildExtraSystemPrompt(): string {
 /** JSONL trace log for debugging LLM input/output — /tmp, non persistente */
 const LLM_TRACE_FILE = "/tmp/xiaozhi-llm-trace.jsonl";
 
+// ─── Instant routing (bypass LLM) ───────────────────────────────────────────
+
+/** Normalize text for pattern matching: lowercase, strip punctuation. */
+function normalizeForRouting(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[.,!?;:'"…\-–—()[\]{}]/g, "")
+    .trim();
+}
+
+type InstantPattern = { re: RegExp; responses: string[] };
+
+const INSTANT_PATTERNS: InstantPattern[] = [
+  {
+    re: /^(ciao|hey|ehi|salve|buongiorno|buonasera|buonanotte|ehilà|oh ciao)$/,
+    responses: ["Ciao!", "Ehi, ciao!", "Ciao, dimmi tutto!", "Eccomi, dimmi!"],
+  },
+  {
+    re: /^(grazie|grazie mille|ti ringrazio|perfetto grazie)$/,
+    responses: ["Di niente!", "Figurati!", "Prego!", "Non c'è di che!"],
+  },
+  {
+    re: /^(arrivederci|a dopo|ciao ciao|ci vediamo|buonanotte|a presto|addio)$/,
+    responses: ["Ciao, a presto!", "A dopo!", "Ci vediamo!", "Buonanotte!"],
+  },
+  {
+    re: /^(chi sei|come ti chiami|tu chi sei)$/,
+    responses: ["Sono il tuo assistente vocale OpenClaw!", "Sono OpenClaw, il tuo assistente!"],
+  },
+  {
+    re: /^(come stai|tutto bene|come va)$/,
+    responses: [
+      "Tutto bene, grazie! Tu come stai?",
+      "Alla grande! Dimmi come posso aiutarti.",
+      "Benissimo! Tu?",
+    ],
+  },
+  {
+    re: /^(che ora è|che ore sono|dimmi lora|lora attuale|ora)$/,
+    responses: [], // dynamic — filled at runtime
+  },
+  {
+    re: /^(che giorno è|che data è|data di oggi|giorno)$/,
+    responses: [], // dynamic — filled at runtime
+  },
+];
+
+/**
+ * Instant routing: matches simple greetings, time, farewells etc.
+ * Returns a response string if matched, null otherwise (fall through to LLM).
+ */
+function routeToInstant(text: string): string | null {
+  const norm = normalizeForRouting(text);
+  for (const pat of INSTANT_PATTERNS) {
+    if (!pat.re.test(norm)) continue;
+
+    // Dynamic: time
+    if (norm.includes("ora")) {
+      const time = new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+      const response = `Sono le ${time}.`;
+      console.log(`[XZ INSTANT] ✅ MATCH ora: "${text}" → "${response}"`);
+      return response;
+    }
+    // Dynamic: date
+    if (norm.includes("giorno") || norm.includes("data")) {
+      const date = new Date().toLocaleDateString("it-IT", {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      });
+      const response = `Oggi è ${date}.`;
+      console.log(`[XZ INSTANT] ✅ MATCH data: "${text}" → "${response}"`);
+      return response;
+    }
+    // Static responses — pick random
+    const response = pat.responses[Math.floor(Math.random() * pat.responses.length)];
+    console.log(`[XZ INSTANT] ✅ MATCH: "${text}" → "${response}"`);
+    return response;
+  }
+  console.log(`[XZ INSTANT] ❌ no match: "${text}" → passa a LLM`);
+  return null;
+}
+
+// ─── Tool intent detection (conversation router) ────────────────────────────
+
+const TOOL_INTENT_KEYWORDS = [
+  "cerca",
+  "trova",
+  "google",
+  "manda",
+  "scrivi",
+  "invia",
+  "messaggio",
+  "leggi",
+  "ricorda",
+  "calendario",
+  "promemoria",
+  "esegui",
+  "scatta",
+  "foto",
+  "apri",
+  "chiudi",
+  "accendi",
+  "spegni",
+  "timer",
+  "sveglia",
+  "alarm",
+];
+
+/**
+ * Detects tool intent from user text.
+ * Returns true if the text likely needs tools, false for pure conversation.
+ */
+function hasToolIntent(text: string): boolean {
+  const norm = normalizeForRouting(text);
+  const words = norm.split(/\s+/);
+  for (const kw of TOOL_INTENT_KEYWORDS) {
+    if (words.some((w) => w.startsWith(kw))) {
+      console.log(`[XZ ROUTER] 🔧 tool intent detected: keyword="${kw}" in "${text}"`);
+      return true;
+    }
+  }
+  console.log(`[XZ ROUTER] 💬 conversation only (no tool intent): "${text}" → disableTools=true`);
+  return false;
+}
+
 // ─── Audio constants ──────────────────────────────────────────────────────────
 
 const UPLOAD_RATE = 16_000; // mic: device → server
@@ -498,6 +625,17 @@ export class AudioPipeline {
    * each partial-reply delta as the LLM streams tokens — used for P1C streaming TTS.
    */
   private async runAgent(text: string, onToken?: (token: string) => void): Promise<string | null> {
+    // Step 2 — Instant routing: bypass LLM for greetings, time, farewells
+    const instant = routeToInstant(text);
+    if (instant) {
+      // Feed entire response as a single token so the streaming TTS picks it up
+      onToken?.(instant);
+      return instant;
+    }
+
+    // Step 3 — Tool intent detection: disable tools for pure conversation
+    const needsTools = hasToolIntent(text);
+
     let deps: Awaited<ReturnType<typeof loadCoreAgentDeps>>;
     try {
       deps = await loadCoreAgentDeps();
@@ -569,6 +707,7 @@ export class AudioPipeline {
         runId,
         lane: "xiaozhi",
         agentDir,
+        disableTools: !needsTools,
         extraSystemPrompt: buildExtraSystemPrompt(),
         // P1C: fire-and-forget partial reply tokens into caller's buffer
         onPartialReply: onToken

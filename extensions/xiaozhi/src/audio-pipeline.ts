@@ -538,6 +538,20 @@ export class AudioPipeline {
     const runId = `xiaozhi:${entry.sessionId}:${Date.now()}`;
     const t0 = Date.now();
 
+    // Resolve provider/model from agents.defaults.model (string or {primary})
+    const rawModel = (() => {
+      const m = (cfg as Record<string, unknown>).agents as Record<string, unknown> | undefined;
+      const d = m?.defaults as Record<string, unknown> | undefined;
+      const val = d?.model;
+      if (typeof val === "string") return val.trim();
+      if (val && typeof val === "object" && "primary" in val)
+        return String((val as Record<string, unknown>).primary ?? "").trim();
+      return "";
+    })();
+    const slashIdx = rawModel.indexOf("/");
+    const cfgProvider = slashIdx > 0 ? rawModel.slice(0, slashIdx) : undefined;
+    const cfgModel = slashIdx > 0 ? rawModel.slice(slashIdx + 1) : rawModel || undefined;
+
     try {
       const result = await deps.runEmbeddedPiAgent({
         sessionId: entry.sessionId,
@@ -547,6 +561,8 @@ export class AudioPipeline {
         workspaceDir,
         config: cfg,
         prompt: text,
+        provider: cfgProvider,
+        model: cfgModel,
         thinkLevel,
         verboseLevel: "off",
         timeoutMs,

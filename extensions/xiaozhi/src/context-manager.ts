@@ -1,9 +1,25 @@
 /**
- * Plan 12 — Compaction proattiva per xiaozhi.
+ * Plan 12 — Session rotation proattiva per xiaozhi (TODO 3).
+ *
+ * Post-analisi F3/F4 (vedi Note/plans/12_Compaction.md): `compactEmbeddedPiSession`
+ * su sessioni vocali xiaozhi produce cut points che lasciano ~0 messaggi da
+ * riassumere (Pi usa `keepRecentTokens=20000` + heuristic chars/4 non allineato
+ * ai token reali del LLM → cutIndex=0 → safeguard "no real conversation messages
+ * to summarize" → compaction cancelled in loop).
+ *
+ * Strategia nuova (questa implementazione): ROTAZIONE di sessione tramite
+ * `resetEmbeddedPiSession` (equivalente extension-side di `/new` dal gateway).
+ * L'hook bundled `session-memory` genera automaticamente
+ * `memory/YYYY-MM-DD-<slug>.md` con summary LLM dell'ultima finestra di 15
+ * messaggi, il transcript vecchio viene archiviato come `.jsonl.reset.<ts>`,
+ * e il prossimo turno voice parte con contesto pulito + `MEMORY.md`
+ * auto-iniettato come bootstrap file (è first-class in `workspace.ts`, vedi
+ * `MINIMAL_BOOTSTRAP_ALLOWLIST` — xiaozhi usa sessionKey="main" quindi NON
+ * viene filtrato).
  *
  * Due trigger combinati, entrambi POST-response (mai prima della risposta vocale):
- *   Trigger A (nightly, principale): setTimeout all'ora configurata (default 3:00)
- *   Trigger B (safety net, post-response): fire-and-forget dopo ogni runAgent()
+ *   Trigger A (nightly, principale): setTimeout a `config.nightly.hour` (default 3:00)
+ *   Trigger B (safety net, post-response): fire-and-forget dopo ogni `runAgent()`
  *
  * Sorgente di verità per il conteggio token: ULTIMO entry assistant del JSONL
  * (`message.usage.totalTokens`). Il runtime cache `sessionEntry.totalTokens` è
@@ -12,7 +28,6 @@
 
 import fs from "node:fs/promises";
 import type { WebSocket } from "ws";
-import { readXiaozhiCompactionConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { buildLlm } from "./protocol.js";
 
@@ -22,27 +37,27 @@ const TAG = "[xiaozhi:context-manager]";
 const HANDLE_TAIL = 16 * 1024;
 
 /**
- * Debounce post-success: il JSONL post-compact mantiene l'ultima `assistant` entry
- * con `usage.totalTokens` elevato finché non arriva un nuovo turno utente.
- * Senza debounce chiameremmo compaction in loop su `readLatestSessionTokens`.
+ * Debounce post-success: dopo una rotation riuscita il nuovo session file è
+ * vuoto (tokens=0) quindi la soglia non scatta da sola, ma teniamo comunque
+ * 10 minuti di silenzio per evitare nightly+threshold concorrenti sullo stesso
+ * turno e dare tempo all'utente di accumulare contesto fresco.
  */
-const COMPACTION_DEBOUNCE_SUCCESS_MS = 10 * 60 * 1000;
+const ROTATION_DEBOUNCE_SUCCESS_MS = 10 * 60 * 1000;
 
 /**
- * Debounce post-cancelled: quando la compaction viene annullata dalla safeguard Pi
- * (tipico caso iniziale: sessione troppo giovane, `keepRecentTokens=20000` hardcoded
- * di Pi lascia 0 messaggi da riassumere), lo stato non cambia → possiamo ritentare
- * rapidamente al prossimo turno voice. 60s evita comunque hammering.
+ * Debounce post-error/skip: 60s è sufficiente ad assorbire race condition di
+ * un errore transitorio (es. file lock) senza bloccare l'utente per l'intera
+ * finestra success.
  */
-const COMPACTION_DEBOUNCE_CANCELLED_MS = 60 * 1000;
+const ROTATION_DEBOUNCE_FALLBACK_MS = 60 * 1000;
 
 type DebounceEntry = {
   at: number;
   windowMs: number;
-  outcome: "success" | "cancelled" | "error";
+  outcome: "success" | "error";
 };
 
-const lastCompactedAt = new Map<string, DebounceEntry>();
+const lastRotatedAt = new Map<string, DebounceEntry>();
 
 // ─── Token reader ─────────────────────────────────────────────────────────────
 
@@ -89,27 +104,9 @@ export async function readLatestSessionTokens(sessionFile: string): Promise<numb
   }
 }
 
-// ─── Config override helper ──────────────────────────────────────────────────
+// ─── Rotation runner ──────────────────────────────────────────────────────────
 
-/**
- * Mutate a (cloned) CoreConfig to set `agents.defaults.compaction.keepRecentTokens`.
- * Creates intermediate nodes if missing. Expected to be called on a fresh
- * `structuredClone` so the caller's original cfg stays intact.
- */
-function applyKeepRecentTokensOverride(cfg: CoreConfig, keepRecentTokens: number): void {
-  const root = cfg as Record<string, unknown>;
-  const agents = (root.agents ?? {}) as Record<string, unknown>;
-  const defaults = (agents.defaults ?? {}) as Record<string, unknown>;
-  const compaction = (defaults.compaction ?? {}) as Record<string, unknown>;
-  compaction.keepRecentTokens = keepRecentTokens;
-  defaults.compaction = compaction;
-  agents.defaults = defaults;
-  root.agents = agents;
-}
-
-// ─── Compaction runner ────────────────────────────────────────────────────────
-
-export type MaybeCompactParams = {
+export type MaybeRotateParams = {
   deps: CoreAgentDeps;
   cfg: CoreConfig;
   sessionId: string;
@@ -120,34 +117,38 @@ export type MaybeCompactParams = {
   provider?: string;
   model?: string;
   thinkLevel?: string;
-  /** Minimum token count to trigger compaction (configurable per call site). */
+  /** Minimum token count to trigger rotation (configurable per call site). */
   minTokens: number;
-  /** Active device WS — used to render "Sto organizzando i ricordi..." on screen. */
+  /** Active device WS — usato per il feedback "Sto organizzando i ricordi...". */
   ws?: WebSocket | null;
   /** Human-readable origin for logs ("nightly" | "threshold"). */
   origin: "nightly" | "threshold";
 };
 
 /**
- * Fire-and-forget compaction runner: debounce → read tokens from JSONL →
- * (optional) memory flush → compactEmbeddedPiSession → incrementCompactionCount.
+ * Fire-and-forget session rotation: debounce → read tokens from JSONL →
+ * `resetEmbeddedPiSession` (minta un nuovo sessionId, fires `command/new` hook
+ * → `session-memory` handler scrive `memory/<date>-<slug>.md`, archivia
+ * vecchio transcript come `.jsonl.reset.<ts>`).
+ *
+ * Chiamato post-response: al prossimo turno voice `resolveMainSessionContext`
+ * leggerà il nuovo sessionId dallo store e Pi creerà un session file pulito.
+ *
  * Fallimenti loggati ma MAI propagati (voice pipeline non deve crashare).
  */
-export async function maybeCompactSession(params: MaybeCompactParams): Promise<void> {
-  const { deps, cfg, sessionKey, sessionFile, origin, minTokens } = params;
+export async function maybeRotateSession(params: MaybeRotateParams): Promise<void> {
+  const { deps, cfg, sessionKey, sessionFile, origin, minTokens, sessionId } = params;
 
-  // Runtime guard: se il build core non espone compactEmbeddedPiSession
+  // Runtime guard: se il build core non espone resetEmbeddedPiSession
   // (dist/ vecchio), skip silenzioso.
-  if (typeof deps.compactEmbeddedPiSession !== "function") {
-    console.log(`${TAG} skip origin=${origin} reason=compactEmbeddedPiSession-not-exported`);
+  if (typeof deps.resetEmbeddedPiSession !== "function") {
+    console.log(`${TAG} skip origin=${origin} reason=resetEmbeddedPiSession-not-exported`);
     return;
   }
 
-  // Debounce split (Opzione A): success=10min, cancelled/failed=60s.
-  // Usa il valore più restrittivo presente nella mappa; se l'ultimo giro è stato
-  // un success restiamo fermi 10min, se è stato un cancel ritentiamo dopo 60s.
+  // Debounce: success=10min, error=60s.
   const debounceKey = `${sessionKey}|${origin}`;
-  const lastEntry = lastCompactedAt.get(debounceKey);
+  const lastEntry = lastRotatedAt.get(debounceKey);
   if (lastEntry) {
     const sinceLast = Date.now() - lastEntry.at;
     if (sinceLast < lastEntry.windowMs) {
@@ -171,12 +172,12 @@ export async function maybeCompactSession(params: MaybeCompactParams): Promise<v
     return;
   }
 
-  console.log(`${TAG} tokens=${tokens} threshold=${minTokens} origin=${origin} outcome=compacting`);
+  console.log(`${TAG} tokens=${tokens} threshold=${minTokens} origin=${origin} outcome=rotating`);
 
   const ws = params.ws;
   const wsOpen = ws && ws.readyState === ws.OPEN;
 
-  // Feedback schermo: inizio compaction
+  // Feedback schermo: inizio rotation
   if (wsOpen) {
     try {
       ws!.send(buildLlm("🔄 Sto organizzando i ricordi...", "neutral"));
@@ -185,210 +186,40 @@ export async function maybeCompactSession(params: MaybeCompactParams): Promise<v
     }
   }
 
-  // Helper per impostare il debounce in base all'esito.
-  const setDebounce = (outcome: "success" | "cancelled" | "error") => {
+  const setDebounce = (outcome: "success" | "error") => {
     const windowMs =
-      outcome === "success" ? COMPACTION_DEBOUNCE_SUCCESS_MS : COMPACTION_DEBOUNCE_CANCELLED_MS;
-    lastCompactedAt.set(debounceKey, { at: Date.now(), windowMs, outcome });
+      outcome === "success" ? ROTATION_DEBOUNCE_SUCCESS_MS : ROTATION_DEBOUNCE_FALLBACK_MS;
+    lastRotatedAt.set(debounceKey, { at: Date.now(), windowMs, outcome });
   };
 
   try {
-    // Memory flush (solo se core lo espone e soglie raggiunte)
-    await maybeRunMemoryFlush(params).catch((err) => {
-      console.error(`${TAG} memory flush error (continuing with compaction):`, err);
+    console.log(`${TAG} rotation start origin=${origin} oldSessionId=${sessionId}`);
+    const result = await deps.resetEmbeddedPiSession!({
+      sessionKey,
+      reason: "new",
+      cfg,
+      commandSource: `xiaozhi:${origin}`,
     });
 
-    // Clone cfg e forza `agents.defaults.compaction.keepRecentTokens` dal config
-    // xiaozhi (default 5K). Upstream Pi ha keepRecentTokens=20000 hardcoded che
-    // su sessioni voice piccole (~17K di messaggi non-system) produce cutPoint=0
-    // → safeguard cancella "no real conversation messages to summarize".
-    // Il core supporta già l'override via `applyPiCompactionSettingsFromConfig`
-    // (src/agents/pi-settings.ts), quindi basta propagare il valore tramite cfg.
-    // Vedi Note/plans/12_Compaction.md TODO 2 + finding F3.
-    const xiaozhiCompaction = readXiaozhiCompactionConfig(cfg);
-    const cfgForCompaction = structuredClone(cfg) as CoreConfig;
-    applyKeepRecentTokensOverride(cfgForCompaction, xiaozhiCompaction.keepRecentTokens);
-
-    // Compaction nativa
     console.log(
-      `${TAG} compaction start origin=${origin} keepRecentTokens=${xiaozhiCompaction.keepRecentTokens}`,
+      `${TAG} rotation completed origin=${origin} oldSessionId=${result.oldSessionId ?? "(none)"} newSessionId=${result.newSessionId} archived=${result.archivedFiles.length}`,
     );
-    const compactResult = await deps.compactEmbeddedPiSession!({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      messageProvider: "xiaozhi",
-      sessionFile: params.sessionFile,
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      config: cfgForCompaction,
-      provider: params.provider,
-      model: params.model,
-      thinkLevel: params.thinkLevel,
-      trigger: "manual",
-      senderIsOwner: true,
-    });
 
-    if (compactResult?.ok && compactResult.compacted) {
-      const tokensAfter = compactResult.result?.tokensAfter;
-      console.log(
-        `${TAG} compaction completed origin=${origin} tokensBefore=${compactResult.result?.tokensBefore ?? tokens} tokensAfter=${tokensAfter ?? "?"}`,
-      );
-
-      // Aggiorna session store (compactionCount + tokensAfter)
-      if (typeof deps.incrementCompactionCount === "function") {
-        try {
-          const storePath = deps.resolveStorePath(cfg.session?.store, { agentId: "main" });
-          const sessionStore = deps.loadSessionStore(storePath) as Record<
-            string,
-            Record<string, unknown>
-          >;
-          await deps.incrementCompactionCount({
-            sessionEntry: sessionStore[sessionKey] as Record<string, unknown> | undefined,
-            sessionStore,
-            sessionKey,
-            storePath,
-            tokensAfter,
-          });
-        } catch (err) {
-          console.error(`${TAG} incrementCompactionCount error:`, err);
-        }
+    // Feedback schermo: fine OK
+    if (wsOpen) {
+      try {
+        ws!.send(buildLlm("✅ Ricordi organizzati!", "happy"));
+      } catch {
+        // non bloccante
       }
-
-      // Feedback schermo: fine OK
-      if (wsOpen) {
-        try {
-          ws!.send(buildLlm("✅ Ricordi organizzati!", "happy"));
-        } catch {
-          // non bloccante
-        }
-      }
-
-      setDebounce("success");
-    } else {
-      // Caso tipico: safeguard Pi cancella perché keepRecentTokens=20000 non lascia
-      // messaggi da riassumere. Stato invariato → retry rapido al prossimo turno.
-      console.log(
-        `${TAG} compaction not executed origin=${origin} ok=${compactResult?.ok} reason=${compactResult?.reason ?? "unknown"} (retry in ${COMPACTION_DEBOUNCE_CANCELLED_MS / 1000}s)`,
-      );
-      setDebounce("cancelled");
     }
+
+    setDebounce("success");
   } catch (err) {
     // Nessun feedback schermo su errore — resta silenzioso (solo log server-side).
-    console.error(`${TAG} compaction error origin=${origin}:`, err);
+    console.error(`${TAG} rotation error origin=${origin}:`, err);
     setDebounce("error");
   }
-}
-
-/**
- * Pre-compaction memory flush. Gira un turno silenzioso sull'agente embedded
- * per salvare memorie durable su disco (memory/YYYY-MM-DD.md).
- *
- * NON passa extraSystemPrompt voice: le regole "1-2 frasi, no markdown" non
- * devono influenzare il flush (che scrive su file markdown).
- *
- * Se `compaction.memoryFlush.alwaysRun === true` (default per xiaozhi), bypassa
- * `shouldRunMemoryFlush()` del core: con soglie xiaozhi basse (25K) la sessione
- * non raggiungerebbe mai la near-overflow (~117K su mistral-small 131K) e il
- * flush non scatterebbe mai — quindi memoria utente vuota per sempre.
- */
-async function maybeRunMemoryFlush(params: MaybeCompactParams): Promise<void> {
-  const { deps, cfg, sessionKey } = params;
-  if (
-    typeof deps.resolveMemoryFlushSettings !== "function" ||
-    typeof deps.resolveMemoryFlushPromptForRun !== "function"
-  ) {
-    return;
-  }
-
-  const settings = deps.resolveMemoryFlushSettings(cfg);
-  if (!settings?.enabled) return;
-
-  // Config xiaozhi — se alwaysRun=true saltiamo shouldRunMemoryFlush().
-  const xiaozhiCompaction = readXiaozhiCompactionConfig(cfg);
-  const alwaysRun = xiaozhiCompaction.memoryFlush.alwaysRun === true;
-
-  const tokensForDecision = await readLatestSessionTokens(params.sessionFile);
-
-  if (!alwaysRun) {
-    // Path "core-compatible": usa la decision function standard (gate near-overflow).
-    if (
-      typeof deps.shouldRunMemoryFlush !== "function" ||
-      typeof deps.resolveMemoryFlushContextWindowTokens !== "function"
-    ) {
-      return;
-    }
-
-    // Legge la session entry dal runtime cache — anche se totalTokens è
-    // inaffidabile, compactionCount / memoryFlushCompactionCount sono corretti.
-    let sessionEntry: Record<string, unknown> | undefined;
-    try {
-      const storePath = deps.resolveStorePath(cfg.session?.store, { agentId: "main" });
-      const sessionStore = deps.loadSessionStore(storePath);
-      sessionEntry = sessionStore[sessionKey] as Record<string, unknown> | undefined;
-    } catch (err) {
-      console.error(`${TAG} memory flush: unable to load session store:`, err);
-    }
-
-    const entryForDecision = {
-      ...(sessionEntry ?? {}),
-      totalTokens: tokensForDecision,
-      totalTokensFresh: true,
-    } as {
-      totalTokens?: number;
-      totalTokensFresh?: boolean;
-      compactionCount?: number;
-      memoryFlushCompactionCount?: number;
-    };
-
-    const contextWindowTokens = deps.resolveMemoryFlushContextWindowTokens({
-      modelId: params.model,
-    });
-    const shouldFlush = deps.shouldRunMemoryFlush({
-      entry: entryForDecision,
-      contextWindowTokens,
-      reserveTokensFloor: settings.reserveTokensFloor,
-      softThresholdTokens: settings.softThresholdTokens,
-    });
-
-    if (!shouldFlush) {
-      console.log(
-        `${TAG} memory flush skipped (shouldRunMemoryFlush=false) tokens=${tokensForDecision}`,
-      );
-      return;
-    }
-  } else {
-    console.log(`${TAG} memory flush forced (alwaysRun=true) tokens=${tokensForDecision}`);
-  }
-
-  const flushPrompt = deps.resolveMemoryFlushPromptForRun({
-    prompt: settings.prompt,
-    cfg,
-  });
-
-  const runId = `xiaozhi-flush:${params.sessionId}:${Date.now()}`;
-  const timeoutMs = deps.resolveAgentTimeoutMs({ cfg });
-
-  console.log(`${TAG} memory flush start`);
-  await deps.runEmbeddedPiAgent({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    messageProvider: "xiaozhi",
-    sessionFile: params.sessionFile,
-    workspaceDir: params.workspaceDir,
-    config: cfg,
-    prompt: flushPrompt,
-    provider: params.provider,
-    model: params.model,
-    thinkLevel: params.thinkLevel,
-    verboseLevel: "off",
-    timeoutMs,
-    runId,
-    lane: "xiaozhi",
-    agentDir: params.agentDir,
-    disableTools: false, // il flush DEVE poter scrivere file su disco
-    // NON passiamo extraSystemPrompt: le regole vocali non si applicano al flush
-  });
-  console.log(`${TAG} memory flush completed`);
 }
 
 // ─── Session context resolver ────────────────────────────────────────────────
@@ -562,7 +393,7 @@ function tzOffsetAtInstant(utcMs: number, timezone: string): number {
 
 export function scheduleNightlyCompaction(params: ScheduleNightlyParams): void {
   if (!params.config.enabled) {
-    console.log(`${TAG} nightly compaction disabled by config`);
+    console.log(`${TAG} nightly rotation disabled by config`);
     return;
   }
   stopNightlyCompaction();
@@ -570,7 +401,7 @@ export function scheduleNightlyCompaction(params: ScheduleNightlyParams): void {
   const delayMs = computeNextNightlyDelayMs(params.config.hour, params.config.timezone);
   const targetDate = new Date(Date.now() + delayMs);
   console.log(
-    `${TAG} nightly compaction scheduled for ${targetDate.toISOString()} (in ${Math.round(delayMs / 1000)}s, hour=${params.config.hour} tz=${params.config.timezone})`,
+    `${TAG} nightly rotation scheduled for ${targetDate.toISOString()} (in ${Math.round(delayMs / 1000)}s, hour=${params.config.hour} tz=${params.config.timezone})`,
   );
 
   nightlyTimer = setTimeout(() => {
@@ -584,7 +415,7 @@ async function runNightlyTick(params: ScheduleNightlyParams): Promise<void> {
     console.log(`${TAG} nightly tick: no active session context, skip`);
   } else {
     try {
-      await maybeCompactSession({
+      await maybeRotateSession({
         deps: params.deps,
         cfg: params.cfg,
         sessionId: ctx.sessionId,

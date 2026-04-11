@@ -8,6 +8,12 @@ export { runEmbeddedPiAgent } from "./agents/pi-embedded.ts";
 export { compactEmbeddedPiSession } from "./agents/pi-embedded-runner.ts";
 export type { CompactEmbeddedPiSessionParams } from "./agents/pi-embedded-runner/compact.ts";
 export type { EmbeddedPiCompactResult } from "./agents/pi-embedded-runner/types.ts";
+// Session rotation (Plan 12 TODO 3 — xiaozhi session reset as compaction alternative)
+export { resetEmbeddedPiSession } from "./agents/pi-embedded-runner.ts";
+export type {
+  ResetEmbeddedPiSessionParams,
+  ResetEmbeddedPiSessionResult,
+} from "./agents/pi-embedded-runner/reset.ts";
 export { resolveAgentTimeoutMs } from "./agents/timeout.ts";
 export { ensureAgentWorkspace } from "./agents/workspace.ts";
 // Memory flush primitives (Plan 12 — pre-compaction memory save)

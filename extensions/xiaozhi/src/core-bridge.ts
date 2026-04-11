@@ -46,6 +46,16 @@ export type CoreCompactResult = {
   };
 };
 
+/** Reset result from resetEmbeddedPiSession (Plan 12 TODO 3 — session rotation). */
+export type CoreResetResult = {
+  ok: true;
+  canonicalKey: string;
+  newSessionId: string;
+  oldSessionId?: string;
+  oldSessionFile?: string;
+  archivedFiles: string[];
+};
+
 export type CoreAgentDeps = {
   resolveAgentDir: (cfg: CoreConfig, agentId: string) => string;
   resolveAgentWorkspaceDir: (cfg: CoreConfig, agentId: string) => string;
@@ -99,6 +109,14 @@ export type CoreAgentDeps = {
   DEFAULT_PROVIDER: string;
 
   // Plan 12 — compaction proattiva per xiaozhi
+  /** Session rotation (Plan 12 TODO 3). Mints new sessionId, fires command/new
+   *  hook (→ session-memory summary), archives old transcript. Runtime-optional. */
+  resetEmbeddedPiSession?: (params: {
+    sessionKey: string;
+    reason?: "new" | "reset";
+    cfg?: CoreConfig;
+    commandSource?: string;
+  }) => Promise<CoreResetResult>;
   /** Native compaction (same function used by /compact). Runtime-optional. */
   compactEmbeddedPiSession?: (params: {
     sessionId: string;

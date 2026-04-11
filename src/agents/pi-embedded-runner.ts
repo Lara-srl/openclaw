@@ -1,6 +1,11 @@
 export type { MessagingToolSend } from "./pi-embedded-messaging.js";
 export { compactEmbeddedPiSession } from "./pi-embedded-runner/compact.js";
 export { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner/extra-params.js";
+export { resetEmbeddedPiSession } from "./pi-embedded-runner/reset.js";
+export type {
+  ResetEmbeddedPiSessionParams,
+  ResetEmbeddedPiSessionResult,
+} from "./pi-embedded-runner/reset.js";
 
 export { applyGoogleTurnOrderingFix } from "./pi-embedded-runner/google.js";
 export {

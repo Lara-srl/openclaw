@@ -12,7 +12,7 @@ import { OpusEncoder } from "@discordjs/opus";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
 import type { WebSocket } from "ws";
 import { readXiaozhiCompactionConfig } from "./config.js";
-import { maybeCompactSession } from "./context-manager.js";
+import { maybeRotateSession } from "./context-manager.js";
 import { loadCoreAgentDeps } from "./core-bridge.js";
 import { buildLlm, buildStt, buildTts } from "./protocol.js";
 
@@ -804,15 +804,15 @@ export class AudioPipeline {
         // trace failure must never break the pipeline
       }
 
-      // Plan 12 — Trigger B: post-response compaction safety net.
-      // Save a closure to be fired later (after buildTts("stop")) so compaction
+      // Plan 12 TODO 3 — Trigger B: post-response session rotation safety net.
+      // Save a closure to be fired later (after buildTts("stop")) so rotation
       // runs AFTER the TTS audio finished streaming to the device. Running it
-      // here would start compaction during TTS streaming, racing with the
-      // session file and impacting subsequent turns.
+      // here would start the reset during TTS streaming, racing with the
+      // session file write and impacting subsequent turns.
       const compactionCfg = readXiaozhiCompactionConfig(this.deps.config);
       if (compactionCfg.enabled && compactionCfg.threshold.enabled) {
         this.pendingCompaction = () => {
-          void maybeCompactSession({
+          void maybeRotateSession({
             deps,
             cfg,
             sessionId: entry.sessionId,

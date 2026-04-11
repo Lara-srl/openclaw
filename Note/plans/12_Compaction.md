@@ -512,25 +512,47 @@ Dopo il deploy con `keepRecentTokens=5000` il loop cancel-retry persisteva. Root
 
 **Implicazione:** con soglia 25K e sessioni voice che accumulano ~2K real token ogni N turni, la tail ricresce velocemente e la compaction tail-only non basta. Serve session rotation (→ TODO 3).
 
-## TODO 3 — Session rotation per riduzioni aggressive (NON IMPLEMENTATO)
+## TODO 3 — Session rotation per riduzioni aggressive (✅ IMPLEMENTATO)
 
 **Problema:** Pi compaction incrementale satura quando il kept region + system prompt supera la soglia xiaozhi. Nessuna evoluzione possibile senza rielaborare il kept region storico.
 
-**Soluzione proposta:** quando `tokensAfter` post-compaction resta sopra soglia (o quando `compactResult.compacted === true` ma `tokensAfter > threshold * 0.9`), avviare **rotazione sessione**:
+**Soluzione implementata:** sostituita `compactEmbeddedPiSession` con **`resetEmbeddedPiSession`**, una nuova primitive che replica il comportamento di `sessions.reset` RPC (gateway lato server) lato extension:
 
-1. Creare un nuovo file di sessione (`<newId>.jsonl`) con:
-   - Nuovo session header
-   - Una singola entry `custom_message` o `compaction` "seed" che contiene il summary della vecchia sessione (riuso del `previousSummary` dalla compaction appena fatta)
-2. Aggiornare il session store xiaozhi (`~/.openclaw/agents/main/sessions.json`) per puntare alla nuova sessionId
-3. Scartare il vecchio file (o archiviarlo in `sessions/archive/`)
-4. La sessione riparte da zero: system prompt (~15K) + seed summary (~1.3K) = ~17K → ampio margine sotto 25K
+1. Fire `command/new` internal hook → il bundled `session-memory` handler (`src/hooks/bundled/session-memory/handler.ts`) scrive automaticamente `~/.openclaw/workspace/memory/YYYY-MM-DD-<slug>.md` con summary LLM dell'ultima finestra di 15 messaggi (slug generato via LLM per titolo descrittivo, fallback path già gestito dall'handler in caso il file sia già stato archiviato).
+2. `updateSessionStore` atomica: mint nuovo `sessionId` (UUID), reset token counters a 0, preserva model / thinking / label / origin / lastChannel / skillsSnapshot. Stessa mutazione usata da `sessions.reset` in `src/gateway/server-methods/sessions.ts:462-494`.
+3. `archiveSessionTranscripts` rinomina vecchio `.jsonl` → `.jsonl.reset.<timestamp>` (stesso meccanismo usato da `/new`).
+4. Prossimo turno voice: `resolveMainSessionContext` legge nuovo `sessionId` dallo store → Pi crea session file pulito. `MEMORY.md` viene auto-iniettato come bootstrap file (è first-class in `src/agents/workspace.ts`, `MINIMAL_BOOTSTRAP_ALLOWLIST` non lo filtra per `sessionKey="main"`).
 
-**Pre-requisiti:**
+**Stato sessione dopo rotation:**
 
-- Verificare che `sessionId` in xiaozhi venga letto da `session.store` e sia aggiornabile runtime
-- Capire se Pi `agent-session.js` può essere istruito a ricaricare da nuovo file (o serve restart agent embedded)
-- Gestire il caso race: rotation durante una risposta in corso
+- Nuovo JSONL vuoto (0 messaggi) → system prompt (~15K) + bootstrap files (inclusi `MEMORY.md` + memory daily file appena creato) = baseline pulita
+- Counters `inputTokens/outputTokens/totalTokens = 0`
+- Memory file daily contiene summary della conversazione precedente → nuovo agent può consultarlo via `memory_search`/`memory_get`
 
-**Rischio:** perdita contesto di task multi-turn (l'utente chiedeva "ricordami domani alle 10" → rotation → nuovo agent non sa). Mitigazione: il memory flush (pre-compaction) salva memorie durable su disco prima della rotation.
+**File modificati (commit questa sessione):**
 
-**Status:** design-only, non implementato. Da fare quando TODO 2 (singola compaction tail-only) si dimostra insufficiente nell'uso reale.
+- `src/agents/pi-embedded-runner/reset.ts` — nuovo file, funzione `resetEmbeddedPiSession` (extension-facing)
+- `src/agents/pi-embedded-runner.ts` — re-export barrel
+- `src/extensionAPI.ts` — re-export `resetEmbeddedPiSession` + types
+- `extensions/xiaozhi/src/core-bridge.ts` — nuovo dep `resetEmbeddedPiSession?` + type `CoreResetResult`
+- `extensions/xiaozhi/src/context-manager.ts` — riscritto: `maybeCompactSession` → `maybeRotateSession`, rimosso `maybeRunMemoryFlush` (l'hook lo fa), rimosso `applyKeepRecentTokensOverride` (non applicabile)
+- `extensions/xiaozhi/src/audio-pipeline.ts` — import aggiornato + closure `pendingCompaction` chiama `maybeRotateSession`
+
+**Differenze rispetto a `sessions.reset` nativa:**
+
+- ❌ **NO** `ensureSessionRuntimeCleanup` — xiaozhi chiama post-response, no run in flight
+- ❌ **NO** `closeAcpRuntimeForSession` — nessun client ACP bound alla sessione voice
+- ❌ **NO** `emitSessionUnboundLifecycleEvent` — nessun thread binding / subagent lifecycle da smontare
+- ✅ **SÌ** hook `command/new` (per session-memory handler)
+- ✅ **SÌ** `updateSessionStore` con nuova UUID + reset counters
+- ✅ **SÌ** `archiveSessionTranscripts`
+
+**Race condition residua:** se il prossimo turno voice arriva MENTRE la rotation è in corso (< 500ms), il resolve della session context potrebbe leggere il vecchio sessionId prima dell'atomic `updateSessionStore`, e Pi aprire un file già archiviato. In pratica la finestra è molto stretta (button press umano = >1s) ed è la stessa race che protegge `sessions.reset` via `ensureSessionRuntimeCleanup`. Non mitigata in questa iterazione; log di errore in caso, ma voice pipeline continua al turno successivo (il fallimento è silenzioso grazie al try/catch di fire-and-forget).
+
+**Cleanup follow-up (non bloccante):**
+
+- `extensions/xiaozhi/src/config.ts`: campo `keepRecentTokens` è ora dead config — nessun consumer, safe da rimuovere (insieme a `openclaw.plugin.json` manifest schema)
+- TODO 1 (memory file overwrite) non più applicabile: l'hook `session-memory` scrive file datato+slug univoco, no collisioni
+- TODO 2 (`keepRecentTokens=1000`): superato dalla rotation, nessuna compaction Pi viene più tentata
+
+**Status:** ✅ IMPLEMENTATO (questa sessione, branch `Compaction`). Typecheck + `pnpm check` passano. Build `pnpm build` rigenera `dist/extensionAPI.js` con il nuovo export. Test operativo reale su device xiaozhi da fare: aspettarsi log `[xiaozhi:context-manager] rotation completed origin=threshold oldSessionId=... newSessionId=... archived=1` + nuovo file in `~/.openclaw/workspace/memory/YYYY-MM-DD-<slug>.md`.

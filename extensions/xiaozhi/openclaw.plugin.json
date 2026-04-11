@@ -15,6 +15,10 @@
     "otaPath": {
       "label": "OTA Endpoint Path",
       "advanced": true
+    },
+    "compaction": {
+      "label": "Proactive Compaction",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -32,6 +36,49 @@
       },
       "otaPath": {
         "type": "string"
+      },
+      "compaction": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "nightly": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "hour": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 23
+              },
+              "minTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "timezone": {
+                "type": "string"
+              }
+            }
+          },
+          "threshold": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "maxTokens": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
       }
     }
   }

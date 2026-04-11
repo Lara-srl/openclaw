@@ -12,6 +12,40 @@ export type CoreConfig = {
   [key: string]: unknown;
 };
 
+/** Session entry shape (loose — core uses a more precise type). */
+export type CoreSessionEntry = {
+  sessionId?: string;
+  totalTokens?: number;
+  totalTokensFresh?: boolean;
+  compactionCount?: number;
+  memoryFlushCompactionCount?: number;
+  updatedAt?: number;
+  [key: string]: unknown;
+};
+
+/** Memory flush settings resolved from config. */
+export type CoreMemoryFlushSettings = {
+  enabled: boolean;
+  softThresholdTokens: number;
+  prompt: string;
+  systemPrompt: string;
+  reserveTokensFloor: number;
+};
+
+/** Compaction result from compactEmbeddedPiSession. */
+export type CoreCompactResult = {
+  ok: boolean;
+  compacted: boolean;
+  reason?: string;
+  result?: {
+    summary: string;
+    firstKeptEntryId: string;
+    tokensBefore: number;
+    tokensAfter?: number;
+    details?: unknown;
+  };
+};
+
 export type CoreAgentDeps = {
   resolveAgentDir: (cfg: CoreConfig, agentId: string) => string;
   resolveAgentWorkspaceDir: (cfg: CoreConfig, agentId: string) => string;
@@ -45,6 +79,8 @@ export type CoreAgentDeps = {
     disableTools?: boolean;
     /** P1C streaming: called (fire-and-forget) with each partial LLM text delta. */
     onPartialReply?: (payload: { text?: string }) => void;
+    /** Agent event stream callback (used for compaction/memory-flush observability). */
+    onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
   }) => Promise<{
     payloads?: Array<{ text?: string; isError?: boolean }>;
     meta?: { aborted?: boolean };
@@ -61,6 +97,52 @@ export type CoreAgentDeps = {
   ) => string;
   DEFAULT_MODEL: string;
   DEFAULT_PROVIDER: string;
+
+  // Plan 12 — compaction proattiva per xiaozhi
+  /** Native compaction (same function used by /compact). Runtime-optional. */
+  compactEmbeddedPiSession?: (params: {
+    sessionId: string;
+    sessionKey?: string;
+    messageProvider?: string;
+    sessionFile: string;
+    workspaceDir: string;
+    agentDir?: string;
+    config?: CoreConfig;
+    provider?: string;
+    model?: string;
+    thinkLevel?: string;
+    trigger?: "overflow" | "manual";
+    senderIsOwner?: boolean;
+  }) => Promise<CoreCompactResult>;
+  /** Decide if pre-compaction memory flush should run. Runtime-optional. */
+  shouldRunMemoryFlush?: (params: {
+    entry?: CoreSessionEntry;
+    contextWindowTokens: number;
+    reserveTokensFloor: number;
+    softThresholdTokens: number;
+  }) => boolean;
+  /** Resolve memory flush settings from config. Runtime-optional. */
+  resolveMemoryFlushSettings?: (cfg?: CoreConfig) => CoreMemoryFlushSettings | null;
+  /** Resolve effective context window tokens for the active model. Runtime-optional. */
+  resolveMemoryFlushContextWindowTokens?: (params: {
+    modelId?: string;
+    agentCfgContextTokens?: number;
+  }) => number;
+  /** Resolve the final memory flush prompt (date stamp + current time line). Runtime-optional. */
+  resolveMemoryFlushPromptForRun?: (params: {
+    prompt: string;
+    cfg?: CoreConfig;
+    nowMs?: number;
+  }) => string;
+  /** Mark the session as compacted in the session store. Runtime-optional. */
+  incrementCompactionCount?: (params: {
+    sessionEntry?: CoreSessionEntry;
+    sessionStore?: Record<string, CoreSessionEntry>;
+    sessionKey?: string;
+    storePath?: string;
+    now?: number;
+    tokensAfter?: number;
+  }) => Promise<number | undefined>;
 };
 
 let coreRootCache: string | null = null;

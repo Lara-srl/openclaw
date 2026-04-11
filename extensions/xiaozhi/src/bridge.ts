@@ -3,6 +3,13 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import { AudioPipeline } from "./audio-pipeline.js";
+import { readXiaozhiCompactionConfig } from "./config.js";
+import {
+  resolveMainSessionContext,
+  scheduleNightlyCompaction,
+  stopNightlyCompaction,
+} from "./context-manager.js";
+import { loadCoreAgentDeps, type CoreConfig } from "./core-bridge.js";
 import { buildHello, parseMessage } from "./protocol.js";
 import type { BridgeDeps, DeviceSession } from "./types.js";
 
@@ -11,12 +18,55 @@ export class XiaozhiBridge {
   private wss: WebSocketServer;
   /** B9: pending TTS frames keyed by deviceId — sent on next reconnect. */
   private pendingTts = new Map<string, Buffer[]>();
+  /** Set when nightly scheduler is active. Cleared on stop(). */
+  private nightlyScheduled = false;
 
   constructor(private deps: BridgeDeps) {
     this.wss = new WebSocketServer({ noServer: true });
     this.wss.on("connection", (ws: WebSocket, req: IncomingMessage) =>
       this.handleConnection(ws, req),
     );
+    // Plan 12 — Trigger A: schedule nightly compaction (fire-and-forget).
+    // Non-blocking: if loadCoreAgentDeps() fails, just log.
+    void this.startNightlyCompaction().catch((err) => {
+      console.error("[xiaozhi] nightly compaction bootstrap failed:", err);
+    });
+  }
+
+  /** First-active session's WebSocket (for compaction screen feedback). */
+  private getActiveWs(): WebSocket | null {
+    for (const s of this.sessions.values()) {
+      if (s.ws.readyState === s.ws.OPEN) return s.ws;
+    }
+    return null;
+  }
+
+  private async startNightlyCompaction(): Promise<void> {
+    const compactionCfg = readXiaozhiCompactionConfig(this.deps.config);
+    if (!compactionCfg.enabled || !compactionCfg.nightly.enabled) {
+      console.log(
+        `[xiaozhi] nightly compaction not scheduled (enabled=${compactionCfg.enabled} nightly.enabled=${compactionCfg.nightly.enabled})`,
+      );
+      return;
+    }
+
+    let deps: Awaited<ReturnType<typeof loadCoreAgentDeps>>;
+    try {
+      deps = await loadCoreAgentDeps();
+    } catch (err) {
+      console.error("[xiaozhi] nightly compaction: core deps unavailable:", err);
+      return;
+    }
+
+    const cfg = this.deps.config as unknown as CoreConfig;
+    scheduleNightlyCompaction({
+      deps,
+      cfg,
+      config: compactionCfg.nightly,
+      getActiveWs: () => this.getActiveWs(),
+      getSessionContext: () => resolveMainSessionContext(deps, cfg),
+    });
+    this.nightlyScheduled = true;
   }
 
   /**
@@ -145,6 +195,11 @@ export class XiaozhiBridge {
 
   /** Gracefully stop the bridge and close all device sessions. */
   async stop(): Promise<void> {
+    // Plan 12 — cleanup nightly scheduler before closing sessions.
+    if (this.nightlyScheduled) {
+      stopNightlyCompaction();
+      this.nightlyScheduled = false;
+    }
     for (const s of this.sessions.values()) {
       s.ws.close();
     }

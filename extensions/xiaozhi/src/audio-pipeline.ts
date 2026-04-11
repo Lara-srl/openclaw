@@ -11,6 +11,8 @@ import { appendFileSync } from "node:fs";
 import { OpusEncoder } from "@discordjs/opus";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
 import type { WebSocket } from "ws";
+import { readXiaozhiCompactionConfig } from "./config.js";
+import { maybeCompactSession } from "./context-manager.js";
 import { loadCoreAgentDeps } from "./core-bridge.js";
 import { buildLlm, buildStt, buildTts } from "./protocol.js";
 
@@ -249,6 +251,12 @@ export class AudioPipeline {
   private isInjectingB9 = false;
   private decoder: OpusEncoder;
   private encoder: OpusEncoder;
+  /**
+   * Plan 12 — Trigger B: closure set by runAgent() that fires a fire-and-forget
+   * compaction. Consumed AFTER the TTS audio finished streaming to the device,
+   * never during the voice turn. Set to null after consumption.
+   */
+  private pendingCompaction: (() => void) | null = null;
 
   constructor(
     private ws: WebSocket,
@@ -516,6 +524,12 @@ export class AudioPipeline {
       this.sendJson(buildTts("stop"));
       this.state = "idle";
       // device will automatically send listen:start (dialog mode)
+
+      // Plan 12 — Trigger B: fire pending compaction AFTER full voice response
+      // has been streamed to the device. Fire-and-forget; consume closure.
+      const pending = this.pendingCompaction;
+      this.pendingCompaction = null;
+      if (pending) pending();
     } catch (err) {
       console.error("[xiaozhi] pipeline error:", err);
       if (gen === this.generation) {
@@ -673,6 +687,10 @@ export class AudioPipeline {
    * each partial-reply delta as the LLM streams tokens — used for P1C streaming TTS.
    */
   private async runAgent(text: string, onToken?: (token: string) => void): Promise<string | null> {
+    // Clear any stale pending compaction from a previous aborted turn — the
+    // current runAgent call will (re)assign it if compaction is enabled.
+    this.pendingCompaction = null;
+
     // Step 2 — Instant routing: bypass LLM for greetings, time, farewells
     const instant = routeToInstant(text);
     if (instant) {
@@ -784,6 +802,32 @@ export class AudioPipeline {
         appendFileSync(LLM_TRACE_FILE, traceEntry + "\n");
       } catch {
         // trace failure must never break the pipeline
+      }
+
+      // Plan 12 — Trigger B: post-response compaction safety net.
+      // Save a closure to be fired later (after buildTts("stop")) so compaction
+      // runs AFTER the TTS audio finished streaming to the device. Running it
+      // here would start compaction during TTS streaming, racing with the
+      // session file and impacting subsequent turns.
+      const compactionCfg = readXiaozhiCompactionConfig(this.deps.config);
+      if (compactionCfg.enabled && compactionCfg.threshold.enabled) {
+        this.pendingCompaction = () => {
+          void maybeCompactSession({
+            deps,
+            cfg,
+            sessionId: entry.sessionId,
+            sessionKey,
+            sessionFile,
+            workspaceDir,
+            agentDir,
+            provider: cfgProvider,
+            model: cfgModel,
+            thinkLevel,
+            minTokens: compactionCfg.threshold.maxTokens,
+            ws: this.ws,
+            origin: "threshold",
+          });
+        };
       }
 
       return response;

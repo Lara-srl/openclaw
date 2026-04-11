@@ -555,4 +555,64 @@ Dopo il deploy con `keepRecentTokens=5000` il loop cancel-retry persisteva. Root
 - TODO 1 (memory file overwrite) non più applicabile: l'hook `session-memory` scrive file datato+slug univoco, no collisioni
 - TODO 2 (`keepRecentTokens=1000`): superato dalla rotation, nessuna compaction Pi viene più tentata
 
-**Status:** ✅ IMPLEMENTATO (questa sessione, branch `Compaction`). Typecheck + `pnpm check` passano. Build `pnpm build` rigenera `dist/extensionAPI.js` con il nuovo export. Test operativo reale su device xiaozhi da fare: aspettarsi log `[xiaozhi:context-manager] rotation completed origin=threshold oldSessionId=... newSessionId=... archived=1` + nuovo file in `~/.openclaw/workspace/memory/YYYY-MM-DD-<slug>.md`.
+**Status:** ✅ IMPLEMENTATO (commit `75366393b`, branch `Compaction`). Typecheck + `pnpm check` passano. Build `pnpm build` rigenera `dist/extensionAPI.js` con il nuovo export.
+
+### Test operativo 2026-04-12 — Rotation OK, memory file NON creato
+
+**Risultati osservati (threshold=500 forzato per test rapido):**
+
+```
+2026-04-12T00:32:21.021 [xiaozhi:context-manager] tokens=5094 threshold=500 origin=threshold outcome=rotating
+2026-04-12T00:32:21.022 [xiaozhi:context-manager] rotation start origin=threshold oldSessionId=e7db63f7-...
+2026-04-12T00:32:21.061 [pi-embedded-runner/reset] session agent:main:main rotated: 42a93d39-... → 2c771729-..., archived=1
+2026-04-12T00:32:21.062 [xiaozhi:context-manager] rotation completed ... archived=1
+```
+
+✅ Store aggiornato con nuovo `sessionId`
+✅ Vecchio `.jsonl` archiviato come `.jsonl.reset.<ts>`
+✅ Nessun errore nel trigger hook (try/catch silenzioso, ma non c'è stato neanche un error log in `/tmp/openclaw/openclaw-2026-04-12.log`)
+❌ **File `memory/YYYY-MM-DD-<slug>.md` NON creato** nonostante:
+
+- `hooks.internal.enabled: true` + `hooks.internal.entries.session-memory.enabled: true` abilitati in `~/.openclaw/openclaw.json`
+- Log gateway mostra `[hooks:loader] Registered hook: session-memory -> command:new, command:reset` al startup
+- `[gateway/hooks] loaded 4 internal hook handlers` conferma registrazione
+- Nessun log `[hooks/session-memory] ...` durante il rotation (l'handler ha `log.debug("Hook triggered ...")` al primo entry point → se fosse chiamato lo vedremmo anche al livello debug che è già abilitato e visibile per altri hook come `[hooks/boot-md]`)
+
+### Root cause: bundle split tra `dist/entry.js` e `dist/extensionAPI.js`
+
+`src/hooks/internal-hooks.ts` usa un `handlers: Map<string, InternalHookHandler[]>` **module-scoped singleton**. Ma la build produce due bundle separati, ciascuno con la sua copia del modulo:
+
+- `dist/entry.js` — gateway bundle. Importa `loadInternalHooks` (lato loader) → registra `session-memory` nel SUO `handlers` Map.
+- `dist/extensionAPI.js` — extension bundle. Importa `triggerInternalHook` (dentro `resetEmbeddedPiSession`) → chiama `handlers.get(...)` sulla PROPRIA Map, che è **vuota** (nessun loader ha mai scritto qui).
+
+Risultato: xiaozhi plugin carica `extensionAPI.js` via `core-bridge.ts:loadCoreAgentDeps()` → il `resetEmbeddedPiSession` chiama un registry diverso da quello del gateway → 0 handlers → `triggerInternalHook` ritorna silenziosamente (linea 198-200: `if (allHandlers.length === 0) return;`).
+
+**Prova incrociata:** altri bundled hook come `boot-md` funzionano perché vengono chiamati dal gateway (`src/gateway/server-startup.ts:112`), usando `triggerInternalHook` importato da **entry.js** → stesso Map. Il nostro path invece attraversa `extensionAPI.js`.
+
+### TODO ripresa domani (2026-04-13)
+
+**Opzione A — Shared registry via `globalThis`:**
+Spostare il Map su `globalThis[Symbol.for("openclaw.internalHooks.handlers")]` così entrambi i bundle vedono lo stesso stato. Patch minimale in `src/hooks/internal-hooks.ts`:
+
+```ts
+const HANDLERS_SYMBOL = Symbol.for("openclaw.internalHooks.handlers");
+const handlers = ((globalThis as any)[HANDLERS_SYMBOL] ??= new Map<
+  string,
+  InternalHookHandler[]
+>());
+```
+
+Zero cambi all'API. Rebuild `pnpm build` e retest. Rischio: qualsiasi altro singleton module-scoped nei hook subsystem (log logger, config cache) potrebbe avere lo stesso problema e richiedere lo stesso trattamento.
+
+**Opzione B — Esporre `triggerInternalHook` via `CoreAgentDeps`:**
+Far sì che xiaozhi non importi mai direttamente `triggerInternalHook` da `extensionAPI.js`. Invece, esporre una funzione `deps.triggerHook` nel `CoreAgentDeps` che _passa_ il call al Map del gateway. Problema: `resetEmbeddedPiSession` vive in `extensionAPI.js`, non nel gateway bundle. Richiede di spostare il trigger dentro un callback passato via deps, o di spostare `resetEmbeddedPiSession` nel gateway bundle e chiamarlo via RPC.
+
+**Opzione C — Chiamata diretta al handler:**
+Bypassare completamente il registry: far chiamare a `resetEmbeddedPiSession` direttamente `saveSessionToMemory` (import da `src/hooks/bundled/session-memory/handler.ts`). Pro: risolve subito. Contro: rompe l'astrazione (altri hook registrati per `command/new` — es. `command-logger` — non vengono più invocati da qui), e se arriveranno nuovi handler per `command/new` in futuro non verranno attivati dal path xiaozhi.
+
+**Raccomandazione:** partire da **Opzione A** (è un one-liner, e se funziona risolve anche futuri bundle-split issue in altri hook subsystem). Se non basta, fallback su Opzione C come mitigazione mirata.
+
+### Cosa resta uguale
+
+- `resetEmbeddedPiSession` funziona correttamente: mint UUID, atomic store update, archive transcript. Solo l'hook trigger è inefficace.
+- Race condition doc'd sopra rimane (osservata in pratica: `42a93d39` era il file cached in audio-pipeline, ma store aveva già una UUID diversa per via di interferenza con un path diverso che tocca la legacy key `main`).

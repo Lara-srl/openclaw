@@ -13,7 +13,10 @@ export const XIAOZHI_COMPACTION_DEFAULTS = {
   },
   threshold: {
     enabled: true,
-    maxTokens: 65_536,
+    maxTokens: 25_000,
+  },
+  memoryFlush: {
+    alwaysRun: true,
   },
 } as const;
 
@@ -39,11 +42,25 @@ const XiaozhuCompactionThresholdSchema = z
   .strict()
   .default(XIAOZHI_COMPACTION_DEFAULTS.threshold);
 
+const XiaozhuCompactionMemoryFlushSchema = z
+  .object({
+    /**
+     * Se true, il memory flush gira PRIMA di ogni compaction xiaozhi bypassando
+     * la decision function `shouldRunMemoryFlush()` del core. Necessario perché
+     * con soglie xiaozhi basse (25K) la sessione non raggiunge mai la soglia
+     * near-overflow del core (~117K) e il flush non scatterebbe mai.
+     */
+    alwaysRun: z.boolean().default(XIAOZHI_COMPACTION_DEFAULTS.memoryFlush.alwaysRun),
+  })
+  .strict()
+  .default(XIAOZHI_COMPACTION_DEFAULTS.memoryFlush);
+
 const XiaozhuCompactionSchema = z
   .object({
     enabled: z.boolean().default(XIAOZHI_COMPACTION_DEFAULTS.enabled),
     nightly: XiaozhuCompactionNightlySchema,
     threshold: XiaozhuCompactionThresholdSchema,
+    memoryFlush: XiaozhuCompactionMemoryFlushSchema,
   })
   .strict()
   .default(XIAOZHI_COMPACTION_DEFAULTS);

@@ -12,6 +12,7 @@
 
 import fs from "node:fs/promises";
 import type { WebSocket } from "ws";
+import { readXiaozhiCompactionConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { buildLlm } from "./protocol.js";
 
@@ -227,13 +228,16 @@ export async function maybeCompactSession(params: MaybeCompactParams): Promise<v
  *
  * NON passa extraSystemPrompt voice: le regole "1-2 frasi, no markdown" non
  * devono influenzare il flush (che scrive su file markdown).
+ *
+ * Se `compaction.memoryFlush.alwaysRun === true` (default per xiaozhi), bypassa
+ * `shouldRunMemoryFlush()` del core: con soglie xiaozhi basse (25K) la sessione
+ * non raggiungerebbe mai la near-overflow (~117K su mistral-small 131K) e il
+ * flush non scatterebbe mai — quindi memoria utente vuota per sempre.
  */
 async function maybeRunMemoryFlush(params: MaybeCompactParams): Promise<void> {
   const { deps, cfg, sessionKey } = params;
   if (
-    typeof deps.shouldRunMemoryFlush !== "function" ||
     typeof deps.resolveMemoryFlushSettings !== "function" ||
-    typeof deps.resolveMemoryFlushContextWindowTokens !== "function" ||
     typeof deps.resolveMemoryFlushPromptForRun !== "function"
   ) {
     return;
@@ -242,47 +246,61 @@ async function maybeRunMemoryFlush(params: MaybeCompactParams): Promise<void> {
   const settings = deps.resolveMemoryFlushSettings(cfg);
   if (!settings?.enabled) return;
 
-  // Legge la session entry dal runtime cache — anche se totalTokens è
-  // inaffidabile, compactionCount / memoryFlushCompactionCount sono corretti.
-  let sessionEntry: Record<string, unknown> | undefined;
-  try {
-    const storePath = deps.resolveStorePath(cfg.session?.store, { agentId: "main" });
-    const sessionStore = deps.loadSessionStore(storePath);
-    sessionEntry = sessionStore[sessionKey] as Record<string, unknown> | undefined;
-  } catch (err) {
-    console.error(`${TAG} memory flush: unable to load session store:`, err);
-  }
+  // Config xiaozhi — se alwaysRun=true saltiamo shouldRunMemoryFlush().
+  const xiaozhiCompaction = readXiaozhiCompactionConfig(cfg);
+  const alwaysRun = xiaozhiCompaction.memoryFlush.alwaysRun === true;
 
-  // Usiamo readLatestSessionTokens (già fatto dal caller) come sorgente
-  // totalTokens per la decision function. Il caller ha già verificato
-  // tokens >= minTokens quindi forziamo totalTokens al valore letto.
   const tokensForDecision = await readLatestSessionTokens(params.sessionFile);
-  const entryForDecision = {
-    ...(sessionEntry ?? {}),
-    totalTokens: tokensForDecision,
-    totalTokensFresh: true,
-  } as {
-    totalTokens?: number;
-    totalTokensFresh?: boolean;
-    compactionCount?: number;
-    memoryFlushCompactionCount?: number;
-  };
 
-  const contextWindowTokens = deps.resolveMemoryFlushContextWindowTokens({
-    modelId: params.model,
-  });
-  const shouldFlush = deps.shouldRunMemoryFlush({
-    entry: entryForDecision,
-    contextWindowTokens,
-    reserveTokensFloor: settings.reserveTokensFloor,
-    softThresholdTokens: settings.softThresholdTokens,
-  });
+  if (!alwaysRun) {
+    // Path "core-compatible": usa la decision function standard (gate near-overflow).
+    if (
+      typeof deps.shouldRunMemoryFlush !== "function" ||
+      typeof deps.resolveMemoryFlushContextWindowTokens !== "function"
+    ) {
+      return;
+    }
 
-  if (!shouldFlush) {
-    console.log(
-      `${TAG} memory flush skipped (shouldRunMemoryFlush=false) tokens=${tokensForDecision}`,
-    );
-    return;
+    // Legge la session entry dal runtime cache — anche se totalTokens è
+    // inaffidabile, compactionCount / memoryFlushCompactionCount sono corretti.
+    let sessionEntry: Record<string, unknown> | undefined;
+    try {
+      const storePath = deps.resolveStorePath(cfg.session?.store, { agentId: "main" });
+      const sessionStore = deps.loadSessionStore(storePath);
+      sessionEntry = sessionStore[sessionKey] as Record<string, unknown> | undefined;
+    } catch (err) {
+      console.error(`${TAG} memory flush: unable to load session store:`, err);
+    }
+
+    const entryForDecision = {
+      ...(sessionEntry ?? {}),
+      totalTokens: tokensForDecision,
+      totalTokensFresh: true,
+    } as {
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+      compactionCount?: number;
+      memoryFlushCompactionCount?: number;
+    };
+
+    const contextWindowTokens = deps.resolveMemoryFlushContextWindowTokens({
+      modelId: params.model,
+    });
+    const shouldFlush = deps.shouldRunMemoryFlush({
+      entry: entryForDecision,
+      contextWindowTokens,
+      reserveTokensFloor: settings.reserveTokensFloor,
+      softThresholdTokens: settings.softThresholdTokens,
+    });
+
+    if (!shouldFlush) {
+      console.log(
+        `${TAG} memory flush skipped (shouldRunMemoryFlush=false) tokens=${tokensForDecision}`,
+      );
+      return;
+    }
+  } else {
+    console.log(`${TAG} memory flush forced (alwaysRun=true) tokens=${tokensForDecision}`);
   }
 
   const flushPrompt = deps.resolveMemoryFlushPromptForRun({

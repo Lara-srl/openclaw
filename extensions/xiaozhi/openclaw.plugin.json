@@ -77,6 +77,15 @@
                 "minimum": 1
               }
             }
+          },
+          "memoryFlush": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "alwaysRun": {
+                "type": "boolean"
+              }
+            }
           }
         }
       }

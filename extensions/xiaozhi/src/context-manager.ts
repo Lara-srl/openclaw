@@ -22,13 +22,27 @@ const TAG = "[xiaozhi:context-manager]";
 const HANDLE_TAIL = 16 * 1024;
 
 /**
- * Debounce: il JSONL post-compact mantiene comunque l'ultima `assistant` entry
+ * Debounce post-success: il JSONL post-compact mantiene l'ultima `assistant` entry
  * con `usage.totalTokens` elevato finché non arriva un nuovo turno utente.
  * Senza debounce chiameremmo compaction in loop su `readLatestSessionTokens`.
  */
-const COMPACTION_DEBOUNCE_MS = 10 * 60 * 1000;
+const COMPACTION_DEBOUNCE_SUCCESS_MS = 10 * 60 * 1000;
 
-const lastCompactedAt = new Map<string, number>();
+/**
+ * Debounce post-cancelled: quando la compaction viene annullata dalla safeguard Pi
+ * (tipico caso iniziale: sessione troppo giovane, `keepRecentTokens=20000` hardcoded
+ * di Pi lascia 0 messaggi da riassumere), lo stato non cambia → possiamo ritentare
+ * rapidamente al prossimo turno voice. 60s evita comunque hammering.
+ */
+const COMPACTION_DEBOUNCE_CANCELLED_MS = 60 * 1000;
+
+type DebounceEntry = {
+  at: number;
+  windowMs: number;
+  outcome: "success" | "cancelled" | "error";
+};
+
+const lastCompactedAt = new Map<string, DebounceEntry>();
 
 // ─── Token reader ─────────────────────────────────────────────────────────────
 
@@ -111,16 +125,19 @@ export async function maybeCompactSession(params: MaybeCompactParams): Promise<v
     return;
   }
 
-  // Debounce: evita compaction loop finché il JSONL non ha ancora rimosso
-  // la vecchia assistant-entry con totalTokens elevato.
+  // Debounce split (Opzione A): success=10min, cancelled/failed=60s.
+  // Usa il valore più restrittivo presente nella mappa; se l'ultimo giro è stato
+  // un success restiamo fermi 10min, se è stato un cancel ritentiamo dopo 60s.
   const debounceKey = `${sessionKey}|${origin}`;
-  const last = lastCompactedAt.get(debounceKey) ?? 0;
-  const sinceLast = Date.now() - last;
-  if (sinceLast < COMPACTION_DEBOUNCE_MS) {
-    console.log(
-      `${TAG} skip origin=${origin} reason=debounce sinceLastMs=${sinceLast} windowMs=${COMPACTION_DEBOUNCE_MS}`,
-    );
-    return;
+  const lastEntry = lastCompactedAt.get(debounceKey);
+  if (lastEntry) {
+    const sinceLast = Date.now() - lastEntry.at;
+    if (sinceLast < lastEntry.windowMs) {
+      console.log(
+        `${TAG} skip origin=${origin} reason=debounce sinceLastMs=${sinceLast} windowMs=${lastEntry.windowMs} lastOutcome=${lastEntry.outcome}`,
+      );
+      return;
+    }
   }
 
   let tokens = 0;
@@ -138,10 +155,6 @@ export async function maybeCompactSession(params: MaybeCompactParams): Promise<v
 
   console.log(`${TAG} tokens=${tokens} threshold=${minTokens} origin=${origin} outcome=compacting`);
 
-  // Debounce è impostato PRIMA dell'effettiva compaction, così un fallimento
-  // non causa retry immediati (prossimo trigger riparte dopo debounce window).
-  lastCompactedAt.set(debounceKey, Date.now());
-
   const ws = params.ws;
   const wsOpen = ws && ws.readyState === ws.OPEN;
 
@@ -153,6 +166,13 @@ export async function maybeCompactSession(params: MaybeCompactParams): Promise<v
       // non bloccante
     }
   }
+
+  // Helper per impostare il debounce in base all'esito.
+  const setDebounce = (outcome: "success" | "cancelled" | "error") => {
+    const windowMs =
+      outcome === "success" ? COMPACTION_DEBOUNCE_SUCCESS_MS : COMPACTION_DEBOUNCE_CANCELLED_MS;
+    lastCompactedAt.set(debounceKey, { at: Date.now(), windowMs, outcome });
+  };
 
   try {
     // Memory flush (solo se core lo espone e soglie raggiunte)
@@ -211,14 +231,20 @@ export async function maybeCompactSession(params: MaybeCompactParams): Promise<v
           // non bloccante
         }
       }
+
+      setDebounce("success");
     } else {
+      // Caso tipico: safeguard Pi cancella perché keepRecentTokens=20000 non lascia
+      // messaggi da riassumere. Stato invariato → retry rapido al prossimo turno.
       console.log(
-        `${TAG} compaction not executed origin=${origin} ok=${compactResult?.ok} reason=${compactResult?.reason ?? "unknown"}`,
+        `${TAG} compaction not executed origin=${origin} ok=${compactResult?.ok} reason=${compactResult?.reason ?? "unknown"} (retry in ${COMPACTION_DEBOUNCE_CANCELLED_MS / 1000}s)`,
       );
+      setDebounce("cancelled");
     }
   } catch (err) {
     // Nessun feedback schermo su errore — resta silenzioso (solo log server-side).
     console.error(`${TAG} compaction error origin=${origin}:`, err);
+    setDebounce("error");
   }
 }
 

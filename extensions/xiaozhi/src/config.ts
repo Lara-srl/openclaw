@@ -18,6 +18,14 @@ export const XIAOZHI_COMPACTION_DEFAULTS = {
   memoryFlush: {
     alwaysRun: true,
   },
+  /**
+   * Override di Pi `keepRecentTokens` (hardcoded 20000 upstream). Con sessioni
+   * voice xiaozhi piccole (~32K totali di cui ~15K system prompt + ~17K messaggi)
+   * il default Pi produce `cutPoint = 0` → safeguard cancella la compaction.
+   * Abbassarlo a 5K lascia ~12K di messaggi vecchi summarizable → compaction
+   * reale (~30% riduzione). Vedi TODO 2 in Note/plans/12_Compaction.md.
+   */
+  keepRecentTokens: 5_000,
 } as const;
 
 const XiaozhuCompactionNightlySchema = z
@@ -61,6 +69,11 @@ const XiaozhuCompactionSchema = z
     nightly: XiaozhuCompactionNightlySchema,
     threshold: XiaozhuCompactionThresholdSchema,
     memoryFlush: XiaozhuCompactionMemoryFlushSchema,
+    keepRecentTokens: z
+      .number()
+      .int()
+      .positive()
+      .default(XIAOZHI_COMPACTION_DEFAULTS.keepRecentTokens),
   })
   .strict()
   .default(XIAOZHI_COMPACTION_DEFAULTS);

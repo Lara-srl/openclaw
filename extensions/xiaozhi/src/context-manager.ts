@@ -89,6 +89,24 @@ export async function readLatestSessionTokens(sessionFile: string): Promise<numb
   }
 }
 
+// ─── Config override helper ──────────────────────────────────────────────────
+
+/**
+ * Mutate a (cloned) CoreConfig to set `agents.defaults.compaction.keepRecentTokens`.
+ * Creates intermediate nodes if missing. Expected to be called on a fresh
+ * `structuredClone` so the caller's original cfg stays intact.
+ */
+function applyKeepRecentTokensOverride(cfg: CoreConfig, keepRecentTokens: number): void {
+  const root = cfg as Record<string, unknown>;
+  const agents = (root.agents ?? {}) as Record<string, unknown>;
+  const defaults = (agents.defaults ?? {}) as Record<string, unknown>;
+  const compaction = (defaults.compaction ?? {}) as Record<string, unknown>;
+  compaction.keepRecentTokens = keepRecentTokens;
+  defaults.compaction = compaction;
+  agents.defaults = defaults;
+  root.agents = agents;
+}
+
 // ─── Compaction runner ────────────────────────────────────────────────────────
 
 export type MaybeCompactParams = {
@@ -180,8 +198,21 @@ export async function maybeCompactSession(params: MaybeCompactParams): Promise<v
       console.error(`${TAG} memory flush error (continuing with compaction):`, err);
     });
 
+    // Clone cfg e forza `agents.defaults.compaction.keepRecentTokens` dal config
+    // xiaozhi (default 5K). Upstream Pi ha keepRecentTokens=20000 hardcoded che
+    // su sessioni voice piccole (~17K di messaggi non-system) produce cutPoint=0
+    // → safeguard cancella "no real conversation messages to summarize".
+    // Il core supporta già l'override via `applyPiCompactionSettingsFromConfig`
+    // (src/agents/pi-settings.ts), quindi basta propagare il valore tramite cfg.
+    // Vedi Note/plans/12_Compaction.md TODO 2 + finding F3.
+    const xiaozhiCompaction = readXiaozhiCompactionConfig(cfg);
+    const cfgForCompaction = structuredClone(cfg) as CoreConfig;
+    applyKeepRecentTokensOverride(cfgForCompaction, xiaozhiCompaction.keepRecentTokens);
+
     // Compaction nativa
-    console.log(`${TAG} compaction start origin=${origin}`);
+    console.log(
+      `${TAG} compaction start origin=${origin} keepRecentTokens=${xiaozhiCompaction.keepRecentTokens}`,
+    );
     const compactResult = await deps.compactEmbeddedPiSession!({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -189,7 +220,7 @@ export async function maybeCompactSession(params: MaybeCompactParams): Promise<v
       sessionFile: params.sessionFile,
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
-      config: cfg,
+      config: cfgForCompaction,
       provider: params.provider,
       model: params.model,
       thinkLevel: params.thinkLevel,

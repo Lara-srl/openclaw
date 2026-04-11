@@ -494,4 +494,43 @@ compactEmbeddedPiSession (compact.ts:540)
 
 **Vincolo del fix:** dato che Pi può summarizzare solo i `messages` (non il system prompt che è ~15K e immutabile), la riduzione massima teorica è ~50% del totale. Per scendere ulteriormente servirebbe tagliare il system prompt (fuori scope Plan 12).
 
-**Status:** fix pronto da implementare, non ancora committato. Da fare appena rientro al progetto.
+**Status:** ✅ IMPLEMENTATO (commit `fe8681619`) — override propagato via `cfg.agents.defaults.compaction.keepRecentTokens` con `structuredClone` in `maybeCompactSession`. Default iniziale: 5000.
+
+### F4 — Follow-up: keepRecentTokens=5000 ancora troppo alto (commit successivo)
+
+Dopo il deploy con `keepRecentTokens=5000` il loop cancel-retry persisteva. Root cause analisi:
+
+- Pi `findCutPoint` (compaction.js:295) usa stima **`chars/4`** (non token reali LLM), cammina all'indietro accumulando finché supera `keepRecentTokens`
+- Sessione voice analizzata (`42a93d39-...jsonl`, 621 righe, 1 compaction a riga 581):
+  - Messaggi post-compaction (righe 582-621): **40 msg, 1874 estTokens totali** (avg 47 estTok/msg — voice messages molto corti)
+  - Tail totale < 5000 → walk-back non supera mai target → `cutIndex = cutPoints[0]` (primo msg del range) → `messagesToSummarize = []` → safeguard cancella
+- Pi `prepareCompaction` (compaction.js:468): `boundaryStart = prevCompactionIndex + 1` — solo messaggi DOPO l'ultima compaction sono candidati. Il "kept region" della compaction precedente (~20K estTokens, righe 352-580) è frozen.
+
+**Fix F4:** abbassato default a `1000` in `XIAOZHI_COMPACTION_DEFAULTS.keepRecentTokens`. Con tail di 1874 estTokens: walk-back accumula ~1000 tok (~20 msg recenti tenuti), cut a metà coda, `messagesToSummarize ≈ 20 msg × 47 estTok = ~900 estTokens` → summary (~200 tok) → savings ~700 estTokens per compaction.
+
+**Limitazione architetturale:** risparmio per singola compaction xiaozhi è modesto (~1-2K real token su totale ~39K) perché Pi non può rielaborare il kept region della compaction precedente. Il 39K reale = ~15K system prompt + ~23K real token di kept region (immutabile) + summary + tail. Pi compaction incrementale può aiutare solo sulla tail nuova.
+
+**Implicazione:** con soglia 25K e sessioni voice che accumulano ~2K real token ogni N turni, la tail ricresce velocemente e la compaction tail-only non basta. Serve session rotation (→ TODO 3).
+
+## TODO 3 — Session rotation per riduzioni aggressive (NON IMPLEMENTATO)
+
+**Problema:** Pi compaction incrementale satura quando il kept region + system prompt supera la soglia xiaozhi. Nessuna evoluzione possibile senza rielaborare il kept region storico.
+
+**Soluzione proposta:** quando `tokensAfter` post-compaction resta sopra soglia (o quando `compactResult.compacted === true` ma `tokensAfter > threshold * 0.9`), avviare **rotazione sessione**:
+
+1. Creare un nuovo file di sessione (`<newId>.jsonl`) con:
+   - Nuovo session header
+   - Una singola entry `custom_message` o `compaction` "seed" che contiene il summary della vecchia sessione (riuso del `previousSummary` dalla compaction appena fatta)
+2. Aggiornare il session store xiaozhi (`~/.openclaw/agents/main/sessions.json`) per puntare alla nuova sessionId
+3. Scartare il vecchio file (o archiviarlo in `sessions/archive/`)
+4. La sessione riparte da zero: system prompt (~15K) + seed summary (~1.3K) = ~17K → ampio margine sotto 25K
+
+**Pre-requisiti:**
+
+- Verificare che `sessionId` in xiaozhi venga letto da `session.store` e sia aggiornabile runtime
+- Capire se Pi `agent-session.js` può essere istruito a ricaricare da nuovo file (o serve restart agent embedded)
+- Gestire il caso race: rotation durante una risposta in corso
+
+**Rischio:** perdita contesto di task multi-turn (l'utente chiedeva "ricordami domani alle 10" → rotation → nuovo agent non sa). Mitigazione: il memory flush (pre-compaction) salva memorie durable su disco prima della rotation.
+
+**Status:** design-only, non implementato. Da fare quando TODO 2 (singola compaction tail-only) si dimostra insufficiente nell'uso reale.

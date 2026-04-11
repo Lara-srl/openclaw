@@ -19,13 +19,22 @@ export const XIAOZHI_COMPACTION_DEFAULTS = {
     alwaysRun: true,
   },
   /**
-   * Override di Pi `keepRecentTokens` (hardcoded 20000 upstream). Con sessioni
-   * voice xiaozhi piccole (~32K totali di cui ~15K system prompt + ~17K messaggi)
-   * il default Pi produce `cutPoint = 0` → safeguard cancella la compaction.
-   * Abbassarlo a 5K lascia ~12K di messaggi vecchi summarizable → compaction
-   * reale (~30% riduzione). Vedi TODO 2 in Note/plans/12_Compaction.md.
+   * Override di Pi `keepRecentTokens` (hardcoded 20000 upstream). Pi
+   * `findCutPoint` usa stima `chars/4` (non token reali LLM) e cammina
+   * all'indietro sulla coda post-compaction accumulando finché supera
+   * `keepRecentTokens`. Nelle sessioni voice xiaozhi i messaggi sono
+   * cortissimi (avg ~47 estTokens/msg): 40 messaggi di coda = ~1874
+   * estTokens totali. Con soglie ≥2K il walk-back non supera mai il target
+   * → `cutIndex = cutPoints[0]` → `messagesToSummarize = []` → safeguard
+   * cancella ("no real conversation messages to summarize") in loop ogni
+   * 60s. Abbassare a 1K garantisce che la coda venga effettivamente
+   * tagliata (~20 msg recenti tenuti, ~20 msg più vecchi summarizzati).
+   * Nota: il risparmio per singola compaction è modesto (~1-2K real tok)
+   * perché Pi non può rielaborare il "kept region" della compaction
+   * precedente — per riduzioni più aggressive servirà session rotation
+   * (TODO 3 in Note/plans/12_Compaction.md).
    */
-  keepRecentTokens: 5_000,
+  keepRecentTokens: 1_000,
 } as const;
 
 const XiaozhuCompactionNightlySchema = z

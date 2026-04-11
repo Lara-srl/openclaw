@@ -70,7 +70,7 @@ const INSTANT_PATTERNS: InstantPattern[] = [
   {
     // "chi sei", "come ti chiami", "qual è il tuo nome", "come ti chiami qual è il tuo nome"
     re: /(chi sei|come ti chiami|qual è il tuo nome|il tuo nome)/,
-    responses: ["Sono il tuo assistente vocale OpenClaw!", "Sono OpenClaw, il tuo assistente!"],
+    responses: ["Sono Ada la tua assistente vocale!", "Sono Ada, la tua assistente!"],
   },
   {
     re: /^(come stai|tutto bene|come va)/,

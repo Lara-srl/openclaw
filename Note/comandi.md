@@ -140,6 +140,7 @@ MKEY=$(grep MISTRAL_API_KEY ~/.bashrc | cut -d= -f2-)
 pkill -9 -f openclaw-gateway 2>/dev/null; sleep 1
 MISTRAL_API_KEY="$MKEY" OPENAI_TTS_BASE_URL="https://api.mistral.ai/v1" \
   pnpm openclaw gateway run --bind loopback --port 18789 --force
+
 ```
 
 Con TTS gain custom (default 0.85):
@@ -161,6 +162,13 @@ MISTRAL_API_KEY="$MKEY" OPENAI_TTS_BASE_URL="https://api.mistral.ai/v1" \
 sleep 5 && tail -20 /tmp/openclaw-gateway.log | sed 's/\x1b\[[0-9;]*m//g'
 ```
 
+## per vedere i log come in foregound
+
+```bash
+tail -f nohup.out
+tail -f /tmp/openclaw/openclaw-2026-04-03.log | grep --line-buffered -oP '"0":"\K[^"]*'
+```
+
 ## Test STT Voxtral
 
 ```bash
@@ -176,3 +184,61 @@ curl -s https://api.mistral.ai/v1/audio/transcriptions \
 ```bash
 ps aux | grep openclaw | grep -v grep
 ```
+
+```bash
+/home/openclaw/.openclaw/openclaw.json
+```
+
+allowBundled: ["_none"] permette solo una skill chiamata \_none che non esiste → tutte le bundled sono disattivate.Le skill workspace (quelle che crei tu in skills/ nel repo) e le skill dei plugin restano attive — l'allowlist filtra solo le bundled.Per riattivarne alcune in futuro, basta sostituire ["_none"] con i nomi che vuoi, es. ["weather", "gog"]. Per riattivare tutte, rimuovi la sezione skills dal JSON.
+
+MKEY=$(grep MISTRAL_API_KEY ~/.bashrc | cut -d= -f2-)pkill -9 -f openclaw-gateway 2>/dev/null; 
+sleep 1 MISTRAL_API_KEY="$MKEY" OPENAI_TTS_BASE_URL="https://api.mistral.ai/v1" pnpm openclaw gateway run --bind loopback --port 18789 --force
+
+---
+
+Bash(cp ~/.openclaw/agents/main/sessions/42a93d39-9cae-4672-84de-37a9d381acfe.jsonl ~/.openclaw/agents/main/sessions/42a93d39-9cae-4672-84de-37a9d381acfe.jsonl.bak &…)  
+ ⎿ Interrupted · What should Claude do instead? 11
+
+❯ quindi mi stai dicendo che non è mai stato fatto il pruning della conversazione?
+
+● Buona domanda. 566 righe dal 28 marzo con ttl: "1h" configurato — chiaramente il pruning non sta funzionando. Vediamo perché.
+
+● Task(Investigate context pruning for embedded agent)  
+ ⎿ Done (36 tool uses · 72.0k tokens · 2m 1s)  
+ (ctrl+o to expand)
+
+❯ del contesto^
+
+● Esatto, il pruning non è MAI stato eseguito. Ecco perché:
+
+cache-ttl funziona SOLO con Anthropic
+
+Il codice in src/agents/pi-embedded-runner/cache-ttl.ts ha una whitelist esplicita:
+
+const CACHE_TTL_NATIVE_PROVIDERS = new Set(["anthropic", "moonshot", "zai"]);
+
+Mistral non c'è. Quando il provider è mistral, il pruning viene completamente saltato — l'extension non viene nemmeno creata. Il ttl: "1h" nel tuo config è stato ignorato da sempre.
+
+Cosa puoi fare
+
+Il compaction (safeguard — che hai già configurato) è provider-agnostic e funziona con Mistral, ma scatta solo quando il contesto si avvicina al limite della context window. Con messaggi vocali corti, non lo
+raggiunge mai → la sessione cresce senza fine.
+
+L'opzione più pratica adesso è resettare la sessione manualmente:
+
+mv ~/.openclaw/agents/main/sessions/42a93d39-9cae-4672-84de-37a9d381acfe.jsonl \
+ ~/.openclaw/agents/main/sessions/42a93d39-9cae-4672-84de-37a9d381acfe.jsonl.bak
+
+Al prossimo PTT ne crea una nuova. Il primo input dovrebbe scendere da ~38K a ~2-4K token. Il .bak resta come backup se vuoi recuperarlo.
+
+Vuoi che lo faccia?
+
+✻ Churned for 2m 22s
+
+─────────────────────────────────────────────────────────────────
+
+#token=b3b4ea68210eb76a9b069b183f2b27de1f54d12151b7d462
+
+pnpm openclaw devices approve --latest
+
+pnpm openclaw dashboard --no-open

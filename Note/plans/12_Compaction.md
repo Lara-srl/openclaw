@@ -1,5 +1,16 @@
 # 12 — Compaction proattiva per Xiaozhi + Mistral
 
+## Stato implementazione
+
+**Branch:** `Compaction`
+**Commit principali:**
+
+- `0dde5f2f4` — feat: Plan 12 base (re-export + bridge + context-manager + audio-pipeline + bridge.ts wiring + nightly scheduler)
+- `d199eecae` — feat: `memoryFlush.alwaysRun` flag + threshold default abbassato a 25K
+- `e06591baf` — fix: split debounce per outcome (success=10min, cancelled=60s)
+
+**Sintesi:** core implementazione ✅ completa, smoke test ✅ Trigger A (nightly) e ✅ Trigger B (post-response) entrambi passano. Memory flush gira e crea file in `~/.openclaw/workspace/memory/`. **Due TODO aperti** documentati in fondo (memory file overwrite + JSONL non compattato per `keepRecentTokens` Pi).
+
 ## Scope e non obiettivi
 
 **Questo piano risolve:** compaction mai scattata sulla sessione xiaozhi perché `runEmbeddedPiAgent()` bypassa il path auto-reply e quindi nessun trigger nativo (pruning cache-ttl, memory flush, compaction auto) viene attivato. Risultato verificato: sessione `42a93d39-9cae-4672-84de-37a9d381acfe.jsonl` da 38K token, 150 turni Mistral, cresce all'infinito.
@@ -52,7 +63,7 @@ Con Mistral (128K window) + messaggi vocali corti → la sessione cresce all'inf
 
 Chiamare `compactEmbeddedPiSession()` (stessa funzione di `/compact`) dal path xiaozhi. Due trigger combinati, entrambi **post-response** (mai prima della risposta vocale).
 
-### Trigger A — Notturno (principale, proattivo)
+### ✅ Trigger A — Notturno (principale, proattivo)
 
 Timer interno a `context-manager.ts` che alle 3:00 (configurabile) chiama compaction se `totalTokens > minTokensForNightlyCompact` (configurabile, default: 8000).
 
@@ -61,9 +72,9 @@ Timer interno a `context-manager.ts` che alle 3:00 (configurabile) chiama compac
 - Tiene le sessioni snelle ogni mattina → meno token di input per turno = risparmio costi
 - Se gateway spento alle 3:00 → niente, Trigger B copre
 
-### Trigger B — Soglia token (safety net, post-response)
+### ✅ Trigger B — Soglia token (safety net, post-response)
 
-**Dopo** ogni risposta vocale (fire-and-forget), se `totalTokens > thresholdTokens` (configurabile, default: 64K) → compatta in background.
+**Dopo** ogni risposta vocale (fire-and-forget), se `totalTokens > thresholdTokens` (configurabile, default: **25K** — abbassato da 64K originale durante test) → compatta in background.
 
 - Scatta solo in caso di uso intenso che supera la soglia in un singolo giorno
 - **Mai prima della risposta** — l'utente riceve la risposta vocale normalmente, poi la compaction gira in background
@@ -71,7 +82,7 @@ Timer interno a `context-manager.ts` che alle 3:00 (configurabile) chiama compac
 
 Entrambi: memory flush prima della compaction per salvare memorie.
 
-### Feedback visivo sul device
+### ✅ Feedback visivo sul device
 
 Durante la compaction, il device mostra un messaggio sullo schermo via `buildLlm()`:
 
@@ -102,40 +113,39 @@ Post-response: l'utente ha già ricevuto la risposta, la compaction gira silenzi
 - ✅ Wiring in `audio-pipeline.ts` **dopo** la risposta vocale (fire-and-forget)
 - ✅ Tutte le soglie configurabili via `openclaw.json`
 
-## File da modificare
+## File modificati
 
-### 1. `src/extensionAPI.ts` — re-export (~8 righe)
+### ✅ 1. `src/extensionAPI.ts` — re-export
+
+Esporta `compactEmbeddedPiSession`, primitive memory flush, `incrementCompactionCount`, helper sessioni. Vedi commit `0dde5f2f4`.
 
 ```typescript
 // Compaction nativa
-export { compactEmbeddedPiSession } from "./agents/pi-embedded-runner.js";
-export type {
-  CompactEmbeddedPiSessionParams,
-  EmbeddedPiCompactResult,
-} from "./agents/pi-embedded-runner/compact.js";
+export { compactEmbeddedPiSession } from "./agents/pi-embedded-runner.ts";
+export type { CompactEmbeddedPiSessionParams } from "./agents/pi-embedded-runner/compact.ts";
+export type { EmbeddedPiCompactResult } from "./agents/pi-embedded-runner/types.ts";
 
 // Memory flush primitives
 export {
-  shouldRunMemoryFlush,
-  resolveMemoryFlushSettings,
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushPromptForRun,
-} from "./auto-reply/reply/memory-flush.js";
+  resolveMemoryFlushSettings,
+  shouldRunMemoryFlush,
+} from "./auto-reply/reply/memory-flush.ts";
 
 // Session updates
-export { incrementCompactionCount } from "./auto-reply/reply/session-updates.js";
+export { incrementCompactionCount } from "./auto-reply/reply/session-updates.ts";
 ```
 
-### 2. `extensions/xiaozhi/src/core-bridge.ts` — estendere CoreAgentDeps
+### ✅ 2. `extensions/xiaozhi/src/core-bridge.ts` — estendere CoreAgentDeps
 
-- Aggiungere: `compactEmbeddedPiSession`, `shouldRunMemoryFlush`, `resolveMemoryFlushSettings`, `resolveMemoryFlushContextWindowTokens`, `resolveMemoryFlushPromptForRun`, `incrementCompactionCount`
-- Aggiungere `onAgentEvent` ai parametri di `runEmbeddedPiAgent`
+Aggiunti campi opzionali (runtime-checked): `compactEmbeddedPiSession`, `shouldRunMemoryFlush`, `resolveMemoryFlushSettings`, `resolveMemoryFlushContextWindowTokens`, `resolveMemoryFlushPromptForRun`, `incrementCompactionCount`. Aggiunti tipi `CoreSessionEntry`, `CoreMemoryFlushSettings`, `CoreCompactResult`. Aggiunto `onAgentEvent` callback ai parametri di `runEmbeddedPiAgent`.
 
-### 3. `extensions/xiaozhi/src/context-manager.ts` — NUOVO FILE (~180 LOC)
+### ✅ 3. `extensions/xiaozhi/src/context-manager.ts` — NUOVO FILE (~540 LOC)
 
 **Sorgente di verità per il conteggio token**
 
-`sessionEntry.totalTokens` dal runtime cache è `null` anche dopo conversazioni reali (verificato con context breakdown `source=run` → `session.totalTokens: null`). Il dato affidabile è nel JSONL: ogni entry `{type:"message", message.role:"assistant"}` contiene `message.usage.totalTokens` popolato correttamente sia per Anthropic che per Mistral (verificato su `42a93d39.jsonl`: 20233 → 20275 → ... crescita reale).
+`sessionEntry.totalTokens` dal runtime cache è `null` anche dopo conversazioni reali (verificato con context breakdown `source=run` → `session.totalTokens: null`). Il dato affidabile è nel JSONL: ogni entry `{type:"message", message.role:"assistant"}` contiene `message.usage.totalTokens` popolato correttamente sia per Anthropic che per Mistral.
 
 **`readLatestSessionTokens(sessionFile: string): Promise<number>`** — helper:
 
@@ -144,97 +154,171 @@ export { incrementCompactionCount } from "./auto-reply/reply/session-updates.js"
 3. Splitta per `\n`, scansione all'indietro
 4. Prima linea valida con `.type === "message"`, `.message.role === "assistant"`, `.message.usage?.totalTokens > 0` → ritorna quel valore
 5. Nessun match → ritorna `0` (sessione nuova o solo turni user/tool)
-6. try/catch → ritorna `0` su qualsiasi errore I/O (sessione sarà considerata sotto soglia, skip compaction)
+6. try/catch → ritorna `0` su qualsiasi errore I/O
 
-**State locale** (module-level, in `context-manager.ts`):
+**State locale** (module-level):
 
-- `lastCompactedAt: Map<string, number>` — debounce per evitare compaction loop quando il JSONL post-compact mantiene ancora la vecchia last-assistant-entry fino al prossimo turno utente
-- `COMPACTION_DEBOUNCE_MS = 10 * 60 * 1000` (10 minuti)
+- `lastCompactedAt: Map<string, DebounceEntry>` — debounce per evitare compaction loop quando il JSONL post-compact mantiene ancora la vecchia last-assistant-entry fino al prossimo turno utente
+- `COMPACTION_DEBOUNCE_SUCCESS_MS = 10 * 60 * 1000` (10 minuti) — solo dopo compaction completata
+- `COMPACTION_DEBOUNCE_CANCELLED_MS = 60 * 1000` (60 secondi) — dopo cancellazione safeguard, retry rapido al prossimo turno
 
 **`maybeCompactSession(params)`** (chiamata post-response + nightly):
 
 1. Runtime guard: `typeof deps.compactEmbeddedPiSession !== "function"` → skip
-2. **Debounce**: se `Date.now() - (lastCompactedAt.get(sessionKey) ?? 0) < COMPACTION_DEBOUNCE_MS` → skip
-3. `const tokens = await readLatestSessionTokens(sessionFile)`
-4. Accetta `minTokens` come parametro (soglia configurabile dal chiamante)
-5. Se `tokens < minTokens` → return
-6. **Feedback schermo**: se `ws` aperto → `buildLlm("🔄 Sto organizzando i ricordi...", "neutral")`
-7. **Memory flush** (se `shouldRunMemoryFlush()` = true):
-   - `deps.runEmbeddedPiAgent()` con prompt flush (salva memorie)
-   - NON passa `buildExtraSystemPrompt()` (regole voce non vanno nel flush)
-8. **Compaction nativa**:
-   - `deps.compactEmbeddedPiSession({ sessionId, sessionKey, messageProvider: "xiaozhi", sessionFile, workspaceDir, agentDir, config, provider, model, thinkLevel, trigger: "manual", senderIsOwner: true })`
-9. Se ok → `incrementCompactionCount()` + `lastCompactedAt.set(sessionKey, Date.now())`
-10. **Feedback schermo**: se `ws` aperto → `buildLlm("✅ Ricordi organizzati!", "happy")`
-11. try/catch — fallimento **MAI** blocca voice pipeline (niente feedback schermo su errore)
-12. Log: `[xiaozhi:context-manager] tokens=N threshold=M outcome=...`
+2. **Debounce split**: se ultima compaction success è < 10min OR cancelled è < 60s → skip
+3. `tokens = await readLatestSessionTokens(sessionFile)`
+4. Se `tokens < minTokens` → return
+5. **Feedback schermo**: `buildLlm("🔄 Sto organizzando i ricordi...", "neutral")`
+6. **Memory flush** via `maybeRunMemoryFlush()` (con bypass `alwaysRun`)
+7. **Compaction nativa**: `deps.compactEmbeddedPiSession({ ..., trigger: "manual", senderIsOwner: true })`
+8. Se ok → `incrementCompactionCount()` + setDebounce("success") + feedback `"✅ Ricordi organizzati!"`
+9. Se cancelled da safeguard → setDebounce("cancelled") con messaggio `(retry in 60s)`
+10. Se errore → setDebounce("error"), nessun feedback schermo
+11. try/catch totale — fallimento **MAI** blocca voice pipeline
 
-Parametro `ws?: WebSocket` opzionale — se non passato o chiuso, skip feedback schermo.
+### ✅ 4. `extensions/xiaozhi/src/audio-pipeline.ts` — wiring in `runAgent()`
 
-**Esempio implementazione `readLatestSessionTokens`:**
+**IMPORTANTE — timing bug scoperto durante test:** `runEmbeddedPiAgent()` ritorna quando l'LLM finisce di generare, ma il TTS streaming continua in parallelo via `consumeLoop`. Chiamare `maybeCompactSession` direttamente dopo `await runEmbeddedPiAgent` la fa partire **durante** il TTS streaming.
 
-```ts
-const HANDLE_TAIL = 16 * 1024; // 16 KB basta per ultimo entry JSONL
+**Fix implementato:** field privato `pendingCompaction: (() => void) | null` nella classe `AudioPipeline`:
 
-async function readLatestSessionTokens(sessionFile: string): Promise<number> {
-  try {
-    const stat = await fs.stat(sessionFile);
-    if (stat.size === 0) return 0;
-    const start = Math.max(0, stat.size - HANDLE_TAIL);
-    const buf = Buffer.alloc(stat.size - start);
-    const fd = await fs.open(sessionFile, "r");
-    try {
-      await fd.read(buf, 0, buf.length, start);
-    } finally {
-      await fd.close();
-    }
-    const lines = buf.toString("utf8").split("\n").filter(Boolean);
-    for (let i = lines.length - 1; i >= 0; i--) {
-      try {
-        const entry = JSON.parse(lines[i]);
-        if (
-          entry.type === "message" &&
-          entry.message?.role === "assistant" &&
-          typeof entry.message?.usage?.totalTokens === "number" &&
-          entry.message.usage.totalTokens > 0
-        ) {
-          return entry.message.usage.totalTokens;
+- `runAgent` salva la chiamata come closure in `this.pendingCompaction` (non la esegue)
+- Dopo `buildTts("stop")` nell'outer function, consume e fire la closure
+- Reset a `null` all'inizio di ogni nuovo `runAgent` per prevenire stale closures
+
+### ✅ 5. `extensions/xiaozhi/src/bridge.ts` — wiring nightly scheduler
+
+In `init()`: chiama `scheduleNightlyCompaction()` con resolver per `getActiveWs()` e `getSessionContext()`. In `disconnect()`: `stopNightlyCompaction()` per cleanup.
+
+### ✅ 6. `extensions/xiaozhi/openclaw.plugin.json` — manifest schema
+
+**IMPORTANTE — gotcha scoperta durante test:** il manifest plugin (`openclaw.plugin.json`) ha **`additionalProperties: false`** e dichiara separatamente lo schema di validazione user config. Senza dichiarare `compaction` nel `configSchema.properties`, il validator core RIFIUTA il config con `must NOT have additional properties` PRIMA che Zod abbia anche solo la possibilità di parsare. **Doppio livello di validazione: manifest JSON schema + Zod schema.** Vanno tenuti in sync.
+
+Aggiunto sub-schema completo per `compaction` con nightly, threshold, memoryFlush.
+
+### ✅ 7. `extensions/xiaozhi/src/config.ts` — Zod schema + helper
+
+- `XIAOZHI_COMPACTION_DEFAULTS`: defaults per nightly (3:00, Europe/Rome, 8K), threshold (**25K** — abbassato da 64K), memoryFlush (`alwaysRun: true`)
+- Schemi Zod: `XiaozhuCompactionNightlySchema`, `XiaozhuCompactionThresholdSchema`, `XiaozhuCompactionMemoryFlushSchema`, `XiaozhuCompactionSchema`
+- **`readXiaozhiCompactionConfig(cfg)` helper:** legge il config xiaozhi da 3 path possibili, in ordine:
+  1. `cfg.plugins.entries.xiaozhi.config` (canonical)
+  2. `cfg.plugins.entries.xiaozhi` (flat)
+  3. `cfg.plugins.xiaozhi` (legacy)
+
+  Mai throwa, ritorna defaults su qualsiasi errore. **IMPORTANTE — gotcha config path:** il path corretto in `~/.openclaw/openclaw.json` è `plugins.entries.xiaozhi.config.compaction` (NON `plugins.xiaozhi.compaction` o `extensions.xiaozhi.compaction`). `PluginEntryConfig` accetta solo `enabled` e `config` come campi top-level.
+
+## Configurazione
+
+### Config xiaozhi (path corretto: `plugins.entries.xiaozhi.config.compaction`)
+
+| Config key                         | Default         | Effetto                                                                         |
+| ---------------------------------- | --------------- | ------------------------------------------------------------------------------- |
+| `compaction.enabled`               | `true`          | Master switch                                                                   |
+| `compaction.nightly.enabled`       | `true`          | Trigger notturno on/off                                                         |
+| `compaction.nightly.hour`          | `3`             | Ora locale (0-23)                                                               |
+| `compaction.nightly.minTokens`     | `8000`          | Soglia minima per compattare di notte                                           |
+| `compaction.nightly.timezone`      | `"Europe/Rome"` | Timezone                                                                        |
+| `compaction.threshold.enabled`     | `true`          | Safety net post-response on/off                                                 |
+| `compaction.threshold.maxTokens`   | **`25000`**     | Soglia voice-tuned (abbassata da 64K originale)                                 |
+| `compaction.memoryFlush.alwaysRun` | **`true`**      | Forza flush prima di ogni compaction xiaozhi (bypassa `shouldRunMemoryFlush()`) |
+
+### Esempio config `~/.openclaw/openclaw.json`
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "xiaozhi": {
+        "enabled": true,
+        "config": {
+          "compaction": {
+            "threshold": {
+              "maxTokens": 25000
+            }
+          }
         }
-      } catch {
-        // linea troncata (possibile se siamo finiti a metà di una riga): ignora
       }
     }
-    return 0;
-  } catch {
-    return 0;
   }
 }
 ```
 
-**`scheduleNightlyCompaction()`** (init bridge):
+I defaults coprono il resto (alwaysRun, nightly, ecc.).
 
-1. Calcola ms fino all'ora configurata (default 3:00, timezone da config, default `Europe/Rome`)
-2. `setTimeout` → `maybeCompactSession(minTokens=nightlyMinTokens)` → rischedula per il giorno dopo
-3. Se gateway spento all'ora → niente, Trigger B (safety net) copre
-4. Log: `[xiaozhi:context-manager] nightly compaction scheduled for HH:MM`
+## Findings importanti durante implementazione
 
-**`stopNightlyCompaction()`**: `clearTimeout()` su bridge disconnect
+Sezione critica: gotcha e scoperte da tenere a mente per future modifiche.
 
-**Config xiaozhi (tutte configurabili in `openclaw.json` → `extensions.xiaozhi`):**
+### F1 — Plugin config: doppio livello di validazione
 
-- `compaction.enabled`: true (default) — abilita/disabilita tutto
-- `compaction.nightly.enabled`: true (default) — abilita/disabilita solo il notturno
-- `compaction.nightly.hour`: 3 (0-23) — ora locale della compaction notturna
-- `compaction.nightly.minTokens`: 8000 — soglia minima per compattare di notte
-- `compaction.nightly.timezone`: "Europe/Rome" — timezone per il calcolo dell'ora
-- `compaction.threshold.enabled`: true (default) — abilita/disabilita solo il safety net
-- `compaction.threshold.maxTokens`: 65536 — soglia token per safety net post-response
+Il config xiaozhi viene validato due volte:
 
-### 4. `extensions/xiaozhi/src/audio-pipeline.ts` — wiring in `runAgent()`
+1. **Manifest JSON schema** (`extensions/xiaozhi/openclaw.plugin.json`) — strict (`additionalProperties: false`), runa PRIMA di Zod
+2. **Zod schema** (`extensions/xiaozhi/src/config.ts`) — runa solo se passa il manifest
 
-- **Dopo** `deps.runEmbeddedPiAgent()` (~riga 766): fire-and-forget `maybeCompactSession(minTokens=thresholdMaxTokens)`
-- La compaction gira in background dopo che la risposta è stata inviata
-- Il `void` keyword evita unhandled promise rejection (try/catch interno a `maybeCompactSession`)
+Se aggiungi un campo nuovo a Zod ma dimentichi il manifest, vedi `must NOT have additional properties` e Zod non viene mai chiamato. Sempre aggiornare ENTRAMBI insieme.
+
+### F2 — Path config: `plugins.entries.xiaozhi.config.*`
+
+Il config user xiaozhi vive in `cfg.plugins.entries.xiaozhi.config.*`, NON in `cfg.plugins.xiaozhi.*` né `cfg.extensions.xiaozhi.*`. `PluginEntryConfig` accetta solo `enabled` + `config` come top-level. Helper `readXiaozhiCompactionConfig` prova 3 path per robustezza ma il path canonical è il primo.
+
+### F3 — Pi `keepRecentTokens` hardcoded a 20000 (override possibile via core)
+
+Pi (`@mariozechner/pi-coding-agent`) hardcoded `keepRecentTokens: 20000` in `node_modules/.pnpm/.../compaction.js:62`. Questo è il vincolo che rende safeguard cancellation inevitabile per sessioni voice piccole (vedi TODO #2).
+
+**SCOPERTA CRITICA:** OpenClaw core **già supporta** override via `cfg.agents.defaults.compaction.keepRecentTokens`. Path:
+
+```
+compactEmbeddedPiSession (compact.ts:540)
+  → createPreparedEmbeddedPiSettingsManager
+  → applyPiCompactionSettingsFromConfig (src/agents/pi-settings.ts:68)
+  → settingsManager.applyOverrides({ compaction: { keepRecentTokens } })
+```
+
+Questo è il **path di fix per TODO #2**.
+
+### F4 — Timing compaction vs TTS streaming
+
+`runEmbeddedPiAgent()` ritorna quando l'LLM finisce, ma `consumeLoop` continua a streamare TTS in parallelo via `Promise.all([agentPromise, consumeLoop()])`. Chiamare fire-and-forget direttamente dopo `await runEmbeddedPiAgent` fa partire la compaction **durante** lo streaming → rischio di interferenze (ws send concorrente, log mischiati, ecc).
+
+**Fix:** field `this.pendingCompaction: (() => void) | null` nella classe `AudioPipeline`. La closure viene salvata in `runAgent` e consumata DOPO `sendJson(buildTts("stop"))` nell'outer function. Reset a `null` all'inizio di ogni runAgent per evitare stale closures.
+
+### F5 — Safeguard cancella se non ci sono "real conversation messages"
+
+`src/agents/pi-extensions/compaction-safeguard.ts:198` cancella se `messagesToSummarize` non contiene almeno un messaggio role `user|assistant|toolResult`. Questo accade quando:
+
+- Pi `findCutPoint` walked tutti i messaggi nella tail di `keepRecentTokens` → cutPoint = 0 → array vuoto
+- Sessione contiene solo output di slash commands (caso scope-out)
+
+Per voice xiaozhi: capita quando `totalTokens (32K) - systemPrompt (~15K) - keepRecent (20K) = -3K < 0` → 0 messaggi summarizable.
+
+### F6 — Memory flush bypass `shouldRunMemoryFlush`
+
+`shouldRunMemoryFlush()` del core usa la formula `contextWindow - reserveFloor - softThreshold ≈ 117K` per mistral-small (131K context). Con threshold xiaozhi a 25K, la sessione **non raggiungerà mai** 117K → flush mai eseguito → directory `workspace/memory/` resta vuota per sempre.
+
+**Fix:** `compaction.memoryFlush.alwaysRun: true` di default per xiaozhi. In `maybeRunMemoryFlush()`, se `alwaysRun=true` salta la decision function e va dritto a `runEmbeddedPiAgent` con il flush prompt.
+
+### F7 — Debounce split: success vs cancelled
+
+Inizialmente debounce era 10min impostato PRIMA della compaction. Problema: cancellazione safeguard bloccava retry per 10min anche se nulla era cambiato. **Fix:** debounce impostato DOPO con valore outcome-aware:
+
+- `success` → 10min (necessario per evitare loop sul JSONL post-compact che mantiene la vecchia entry)
+- `cancelled` → 60s (retry rapido al prossimo turno voice mentre la sessione cresce)
+- `error` → 60s (idem)
+
+### F8 — Token reading: usage.totalTokens vs sessionEntry.totalTokens
+
+`sessionEntry.totalTokens` dal session store runtime cache è spesso `null` anche con conversazione attiva. Il dato affidabile è in `message.usage.totalTokens` dell'ultima entry assistant del JSONL. `readLatestSessionTokens` legge solo gli ultimi 16KB del file → costo O(1) indipendente dalla dimensione.
+
+### F9 — Memory flush prompt: APPEND vs OVERWRITE
+
+`DEFAULT_MEMORY_FLUSH_PROMPT` (`src/auto-reply/reply/memory-flush.ts:11-16`) dice esplicitamente:
+
+```
+IMPORTANT: If the file already exists, APPEND new content only and do not overwrite existing entries.
+```
+
+Mistral-small NON segue l'istruzione e sovrascrive il file. Limitazione modello (vedi TODO #1). Claude/GPT-4 rispetterebbero la regola.
 
 ## Flusso risultante
 
@@ -243,7 +327,7 @@ Bridge.init()
   └─ scheduleNightlyCompaction()                          ← TRIGGER A (3:00, principale)
        └─ setTimeout → maybeCompactSession(minTokens=8K)
             ├─ 📱 schermo: "🔄 Sto organizzando i ricordi..."
-            ├─ memory flush (salva memorie)
+            ├─ memory flush (forzato da alwaysRun)
             ├─ compactEmbeddedPiSession()
             ├─ 📱 schermo: "✅ Ricordi organizzati!"
             └─ rischedula per domani
@@ -251,134 +335,51 @@ Bridge.init()
 AudioPipeline.runAgent()
   │
   ├─ 1. routeToInstant() / hasToolIntent()                ← ESISTENTE
-  │
-  ├─ 2. deps.runEmbeddedPiAgent({...})                    ← ESISTENTE (risposta vocale)
-  │
-  ├─ 3. speak TTS → utente riceve risposta                ← ESISTENTE
-  │
-  └─ 4. fire-and-forget:                                  ← TRIGGER B (safety net)
-        void maybeCompactSession(minTokens=64K)
-              ├─ totalTokens > 64K? → compact (+ feedback schermo)
-              └─ totalTokens < 64K? → niente (99%)
+  ├─ 2. deps.runEmbeddedPiAgent({...})                    ← ESISTENTE
+  ├─ 3. salva closure pendingCompaction
+  ├─ 4. (outer) speak TTS → utente riceve risposta        ← ESISTENTE
+  ├─ 5. sendJson(buildTts("stop"))
+  └─ 6. fire pendingCompaction:                            ← TRIGGER B (post-TTS)
+        void maybeCompactSession(minTokens=25K)
+              ├─ debounce check (split success/cancelled)
+              ├─ totalTokens > 25K? → memory flush + compact
+              └─ totalTokens < 25K? → skip silenzioso
 
 Bridge.disconnect()
   └─ stopNightlyCompaction()                              ← CLEANUP
 ```
 
-## Configurazione
+## Verifica — risultati test reali
 
-### Config xiaozhi (tutte configurabili in `openclaw.json` → `extensions.xiaozhi`)
+### ✅ Test Trigger A — Nightly (smoke)
 
-| Config key                       | Default         | Effetto                                                         |
-| -------------------------------- | --------------- | --------------------------------------------------------------- |
-| `compaction.enabled`             | `true`          | Master switch: abilita/disabilita tutta la compaction proattiva |
-| `compaction.nightly.enabled`     | `true`          | Abilita/disabilita solo il trigger notturno                     |
-| `compaction.nightly.hour`        | `3`             | Ora locale della compaction notturna (0-23)                     |
-| `compaction.nightly.minTokens`   | `8000`          | Soglia minima: compatta solo se sessione > N token              |
-| `compaction.nightly.timezone`    | `"Europe/Rome"` | Timezone per il calcolo dell'ora                                |
-| `compaction.threshold.enabled`   | `true`          | Abilita/disabilita solo il safety net post-response             |
-| `compaction.threshold.maxTokens` | `65536`         | Soglia token per il safety net (default ~50% di 128K)           |
+Phase 0 superato — scheduling, calcolo delay timezone, setTimeout, rischedulazione tutto funzionante. Log atteso:
 
-### Config core OpenClaw (riusate, non nuove)
-
-| Config key                                                   | Default         | Effetto                             |
-| ------------------------------------------------------------ | --------------- | ----------------------------------- |
-| `agents.defaults.compaction.memoryFlush.enabled`             | `true`          | Memory flush prima della compaction |
-| `agents.defaults.compaction.memoryFlush.softThresholdTokens` | `4000`          | Margine per flush anticipato        |
-| `agents.defaults.compaction.mode`                            | `"safeguard"`   | Strategia compaction                |
-| `agents.defaults.compaction.model`                           | (agent's model) | Modello usato per summarization     |
-
-### Esempio config `openclaw.json`
-
-```json
-{
-  "extensions": {
-    "xiaozhi": {
-      "compaction": {
-        "enabled": true,
-        "nightly": {
-          "enabled": true,
-          "hour": 3,
-          "minTokens": 8000,
-          "timezone": "Europe/Rome"
-        },
-        "threshold": {
-          "enabled": true,
-          "maxTokens": 65536
-        }
-      }
-    }
-  }
-}
+```
+[xiaozhi:context-manager] nightly compaction scheduled for 2026-04-12T01:00:00.000Z (in XXXXs, hour=3 tz=Europe/Rome)
 ```
 
-### Soglie esempio
+### ✅ Test Trigger B — Threshold (post-response)
 
-| threshold.maxTokens | Compaction scatta a | ~Turni vocali prima del safety net                |
-| ------------------- | ------------------- | ------------------------------------------------- |
-| 65536 (default)     | 64K token           | ~300-500 (raramente raggiunto con nightly attivo) |
-| 40000               | 40K token           | ~150-200                                          |
-| 25000               | 25K token           | ~100-150                                          |
+Tokens che superano 25K → compaction parte dopo `buildTts("stop")`. Log osservato durante test reale:
 
-Con il trigger notturno attivo, il safety net scatta quasi mai — la sessione viene pulita ogni notte.
+```
+2026-04-11T11:33:48.629 [xiaozhi:context-manager] tokens=31849 threshold=25000 origin=threshold outcome=compacting
+2026-04-11T11:33:48.633 [xiaozhi:context-manager] memory flush forced (alwaysRun=true) tokens=31849
+2026-04-11T11:33:48.635 [xiaozhi:context-manager] memory flush start
+2026-04-11T11:33:52.170 [xiaozhi:context-manager] memory flush completed
+2026-04-11T11:33:52.171 [xiaozhi:context-manager] compaction start origin=threshold
+2026-04-11T11:33:52.286 [compaction-safeguard] Compaction safeguard: cancelling compaction with no real conversation messages to summarize.
+2026-04-11T11:33:52.291 [xiaozhi:context-manager] compaction not executed origin=threshold ok=false reason=Compaction cancelled (retry in 60s)
+```
 
-## Ordine implementazione
+**Memory flush ✅** — file creato in `~/.openclaw/workspace/memory/2026-04-11.md` (con caveat overwrite, vedi TODO #1).
+**Compaction ❌** — cancellata da safeguard Pi (vedi TODO #2).
 
-1. Re-export in `extensionAPI.ts` → `pnpm build` → zero behavior change
-2. Estendere `CoreAgentDeps` in `core-bridge.ts` (type-only)
-3. Creare `context-manager.ts` (~150 LOC)
-4. Wiring in `audio-pipeline.ts`: post-response fire-and-forget compaction
-5. Wiring in `bridge.ts`: schedule/stop nightly compaction
-6. Smoke test su device
+### ✅ Test debounce split
 
-## Rischi e mitigazioni
-
-| Rischio                                                                                      | Mitigazione                                                                                                                                                    |
-| -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Compaction blocca risposta vocale                                                            | **Post-response**: gira DOPO la risposta, fire-and-forget                                                                                                      |
-| Latenza percepita dall'utente                                                                | **Zero**: compaction in background, utente ha già ricevuto risposta                                                                                            |
-| `CoreAgentDeps` type drift con dist/                                                         | Runtime guard → skip silenzioso                                                                                                                                |
-| Compaction/flush fallisce                                                                    | try/catch totale, log e return silenzioso                                                                                                                      |
-| Race condition: nuovo turno durante compaction background                                    | Session write lock interno a `compactEmbeddedPiSession` serializza                                                                                             |
-| Session store stale dopo compact                                                             | Aggiorna in-memory + disco via `incrementCompactionCount`                                                                                                      |
-| Voice extra-system-prompt nel flush                                                          | NON passato al flush (solo core systemPrompt)                                                                                                                  |
-| setTimeout notturno perso dopo restart gateway                                               | Trigger B (safety net) copre; setTimeout si rischedula al prossimo avvio                                                                                       |
-| Compaction notturna su sessione quasi vuota                                                  | Soglia `nightly.minTokens` (default 8K) previene compaction inutili                                                                                            |
-| `sessionEntry.totalTokens` vale `null` nel runtime cache                                     | **Risolto**: leggiamo direttamente l'ultimo turno del JSONL (`readLatestSessionTokens`) — fonte di verità persistente, niente state in-memory da sincronizzare |
-| JSONL post-compact mantiene ancora la vecchia entry fino al prossimo turno → compaction loop | **Debounce 10 min** via `lastCompactedAt` Map — skip silenzioso se l'ultima compaction è recente                                                               |
-| Race lettura JSONL mentre runner scrive                                                      | `maybeCompactSession` chiamata **post** `runEmbeddedPiAgent.then()` → turno già persistito, file stabile                                                       |
-| File JSONL cresciuto a decine di MB (caso estremo)                                           | Reverse-scan legge solo ultimi 16 KB via `fs.open + fd.read` → lettura costante O(1) indipendente dalla dimensione                                             |
-| Linea JSONL troncata a metà nei 16 KB di coda                                                | try/catch su `JSON.parse` → linea saltata, continua scan all'indietro                                                                                          |
-
-## Verifica
-
-### Test funzionale (Trigger B — soglia post-response)
-
-1. Abbassare temporaneamente `compaction.threshold.maxTokens` a un valore basso (es. `5000`) in `openclaw.json`
-2. Avviare gateway Mistral, parlare al device finché la sessione xiaozhi supera 5K token
-3. Log atteso sul turno che supera la soglia:
-   ```
-   [xiaozhi:context-manager] tokens=5234 threshold=5000 outcome=compacting
-   [xiaozhi:context-manager] memory flush start
-   [xiaozhi:context-manager] memory flush completed
-   [xiaozhi:context-manager] compaction start
-   [xiaozhi:context-manager] compaction completed
-   ```
-4. Device mostra sullo schermo: `🔄 Sto organizzando i ricordi...` → `✅ Ricordi organizzati!`
-5. Turni successivi: `tokens=~2000 threshold=5000 outcome=skip` (post-compact l'ultimo assistant turn riflette la nuova dimensione)
-6. Debounce: nello stesso turno immediatamente dopo, anche se il JSONL non ha ancora aggiornato, skip silenzioso per 10 min
-7. `~/.openclaw/workspace/memory/YYYY-MM-DD.md` creato/aggiornato dal flush
-
-### Test Trigger A (nightly)
-
-1. Impostare `compaction.nightly.hour` all'ora locale corrente + 2 minuti
-2. Assicurarsi che la sessione abbia `>= nightly.minTokens` (default 8K)
-3. Log atteso allo scoccare:
-   ```
-   [xiaozhi:context-manager] nightly compaction scheduled for HH:MM
-   [xiaozhi:context-manager] nightly tick tokens=XXXXX threshold=8000 outcome=compacting
-   ```
-4. Dopo 24h: log rischedulazione per il giorno successivo
+Prima del fix: dopo cancellazione safeguard, retry bloccato 10min.
+Dopo fix: log mostra `(retry in 60s)`. Verificato.
 
 ### Sanity check — non regressione
 
@@ -389,23 +390,108 @@ Con il trigger notturno attivo, il safety net scatta quasi mai — la sessione v
 
 ## Riferimenti codice
 
-| File                                               | Righe           | Cosa fa                                                                                                                                           |
-| -------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/agents/pi-embedded-runner/compact.ts`         | 88-125, 247-761 | `CompactEmbeddedPiSessionParams`, `compactEmbeddedPiSessionDirect()`                                                                              |
-| `src/agents/pi-embedded-runner.ts`                 | 2               | Re-export `compactEmbeddedPiSession`                                                                                                              |
-| `src/agents/pi-extensions/compaction-safeguard.ts` | 198-202         | Safeguard "no real conversation messages" (spiega perché `/compact` manuale su sessioni vuote viene rifiutato — corretto, fuori scope di Plan 12) |
-| `src/auto-reply/reply/memory-flush.ts`             | 113-144         | `shouldRunMemoryFlush()` threshold logic                                                                                                          |
-| `src/auto-reply/reply/agent-runner-memory.ts`      | 27-172          | `runMemoryFlushIfNeeded()` execution                                                                                                              |
-| `src/auto-reply/reply/commands-compact.ts`         | 47-144          | `/compact` handler (reference implementation)                                                                                                     |
-| `src/auto-reply/reply/session-updates.ts`          | -               | `incrementCompactionCount()`                                                                                                                      |
-| `src/agents/pi-embedded-runner/cache-ttl.ts`       | 11              | Provider whitelist (NON toccare)                                                                                                                  |
-| `src/config/zod-schema.agent-defaults.ts`          | 80-98           | Schema config compaction                                                                                                                          |
-| `extensions/xiaozhi/src/audio-pipeline.ts`         | 675-794         | `runAgent()` — punto integrazione                                                                                                                 |
-| `extensions/xiaozhi/src/core-bridge.ts`            | -               | `CoreAgentDeps` type                                                                                                                              |
+| File                                               | Righe           | Cosa fa                                                                                                                                            |
+| -------------------------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/agents/pi-embedded-runner/compact.ts`         | 88-125, 247-761 | `CompactEmbeddedPiSessionParams`, `compactEmbeddedPiSessionDirect()` — chiama `createPreparedEmbeddedPiSettingsManager` riga 540                   |
+| `src/agents/pi-settings.ts`                        | 56-97           | **`applyPiCompactionSettingsFromConfig`** — override di `keepRecentTokens` Pi via `cfg.agents.defaults.compaction.keepRecentTokens` (path TODO #2) |
+| `src/agents/pi-project-settings.ts`                | 64-75           | `createPreparedEmbeddedPiSettingsManager` — calling site di `applyPiCompactionSettingsFromConfig`                                                  |
+| `src/agents/pi-embedded-runner.ts`                 | 2               | Re-export `compactEmbeddedPiSession`                                                                                                               |
+| `src/agents/pi-extensions/compaction-safeguard.ts` | 195-202         | Safeguard "no real conversation messages" — cancella se `messagesToSummarize` vuoto                                                                |
+| `src/auto-reply/reply/memory-flush.ts`             | 11-16, 113-144  | `DEFAULT_MEMORY_FLUSH_PROMPT` (con APPEND directive) + `shouldRunMemoryFlush()` threshold logic                                                    |
+| `src/auto-reply/reply/agent-runner-memory.ts`      | 27-172          | `runMemoryFlushIfNeeded()` execution                                                                                                               |
+| `src/auto-reply/reply/commands-compact.ts`         | 47-144          | `/compact` handler (reference implementation)                                                                                                      |
+| `src/auto-reply/reply/session-updates.ts`          | -               | `incrementCompactionCount()`                                                                                                                       |
+| `src/agents/pi-embedded-runner/cache-ttl.ts`       | 11              | Provider whitelist (NON toccare)                                                                                                                   |
+| `src/config/zod-schema.agent-defaults.ts`          | 80-98           | Schema config compaction (`keepRecentTokens` riga 84 — già supportato!)                                                                            |
+| `extensions/xiaozhi/src/audio-pipeline.ts`         | -               | `runAgent()` — `pendingCompaction` closure consumed dopo `buildTts("stop")`                                                                        |
+| `extensions/xiaozhi/src/context-manager.ts`        | 1-540           | Tutta la logica compaction xiaozhi (NUOVO)                                                                                                         |
+| `extensions/xiaozhi/src/core-bridge.ts`            | 100-145         | `CoreAgentDeps` esteso con compaction primitives                                                                                                   |
+| `extensions/xiaozhi/openclaw.plugin.json`          | 19-93           | Manifest JSON schema (sync con Zod)                                                                                                                |
+| `extensions/xiaozhi/src/config.ts`                 | 1-117           | Zod schema + `readXiaozhiCompactionConfig` helper                                                                                                  |
 
 ## Evidenze raccolte (contesto implementativo)
 
-- **Sessione xiaozhi "zombie"**: `~/.openclaw/agents/main/sessions/42a93d39-9cae-4672-84de-37a9d381acfe.jsonl` — 570 righe dal 28 marzo, 150 turni Mistral + 90 Anthropic, `message.usage.totalTokens` cresce 20233 → 20497 su dialoghi brevi, mai compattata.
+- **Sessione xiaozhi "zombie"**: `~/.openclaw/agents/main/sessions/42a93d39-9cae-4672-84de-37a9d381acfe.jsonl` — 570 righe dal 28 marzo, 150 turni Mistral + 90 Anthropic, `message.usage.totalTokens` cresce 20233 → 20497 su dialoghi brevi, mai compattata (pre-Plan-12).
 - **Runtime cache vuota**: `session.totalTokens: null` nel context breakdown `source=run` anche dopo conversazione reale → **non usare** `sessionEntry.totalTokens` come fonte, leggere dal JSONL.
-- **`/compact` manuale** fallisce con `Compaction safeguard: cancelling compaction with no real conversation messages to summarize` su sessioni che contengono solo output di slash commands (es. `4e5ee7af-...`, 9 entry tutte `role=assistant` da `/context`/`/compact`). Comportamento corretto, non toccare.
-- **`usage.totalTokens` popolato sia per Anthropic che Mistral**: verificato su `42a93d39.jsonl` — entrambi i provider scrivono il campo correttamente nel JSONL. L'approccio "leggi ultimo turno JSONL" funziona identico per i due stack.
+- **`/compact` manuale** fallisce con `Compaction safeguard: cancelling compaction with no real conversation messages to summarize` su sessioni che contengono solo output di slash commands. Comportamento corretto, non toccare.
+- **`usage.totalTokens` popolato sia per Anthropic che Mistral**: verificato — entrambi i provider scrivono il campo correttamente nel JSONL.
+- **Test reale 2026-04-11**: sessione cresciuta da 30943 → 31849 tokens, due tentativi di compaction entrambi cancellati da safeguard. JSONL stabile (mtime non cambia post-compaction-attempt). Memory file `2026-04-11.md` creato e sovrascritto ad ogni flush.
+
+---
+
+# 🚧 TODO POST-IMPLEMENTAZIONE
+
+Due problemi scoperti durante test operativo che restano aperti dopo i commit `0dde5f2f4`, `d199eecae`, `e06591baf`.
+
+## TODO 1 — Memory file sovrascritto (NON normale ma spiegabile)
+
+**Sintomo:** ad ogni esecuzione del memory flush, il file `~/.openclaw/workspace/memory/YYYY-MM-DD.md` viene **sovrascritto** invece di accrescersi. I contenuti delle iterazioni precedenti vengono persi.
+
+**Causa:** `DEFAULT_MEMORY_FLUSH_PROMPT` (`src/auto-reply/reply/memory-flush.ts:11-16`) istruisce esplicitamente:
+
+```
+IMPORTANT: If the file already exists, APPEND new content only and do not overwrite existing entries.
+```
+
+Mistral-small **non rispetta** l'istruzione e usa Write invece di Read+Edit. Limitazione del modello. Claude/GPT-4 seguirebbero la regola.
+
+**Aggravante:** con `memoryFlush.alwaysRun: true` e debounce cancelled a 60s, ogni turno voice quando tokens > 25K rifa il flush → file riscritto continuamente con varianti minime → cost elevato in token + perdita di memorie precedenti.
+
+**Soluzioni proposte (da scegliere):**
+
+1. **Pre-read file content + inject in prompt** — leggere il file esistente e iniettarlo nel flush prompt come `<existing-content>...</existing-content>`, dicendo all'LLM "scrivi una nuova versione che mantenga TUTTO questo + le nuove memorie". Non dipende da semantica Edit/Append. Implementare in `extensions/xiaozhi/src/context-manager.ts` → `maybeRunMemoryFlush`.
+2. **Separato debounce memory flush** — non rifare flush più frequentemente di N minuti (es. 10min) anche se compaction viene riprovata. Limita lo spreco token + l'overwrite ripetuto.
+3. **Prompt più aggressivo** — mistral-tuned: "DO NOT use Write. Use Read first, then Edit to merge new memories with existing ones." Dipende ancora dall'obbedienza del modello.
+4. **Disabilitare Write tool** durante il flush — forzare l'agente a usare Edit. Richiede modifica `disableTools` o tool-allowlist nel runEmbeddedPiAgent call.
+
+**Raccomandato:** combinazione di **1 + 2** (pre-read + debounce flush separato).
+
+## TODO 2 — JSONL mai modificato (PROBLEMA REALE, fix pulito)
+
+**Sintomo:** dopo ore di uso, il file JSONL della sessione (`~/.openclaw/agents/main/sessions/<id>.jsonl`) **non viene mai compattato**. I token di input restano stabili (~31K) all'infinito. Ogni tentativo di compaction parte ma viene cancellato dal safeguard:
+
+```
+[compaction-safeguard] Compaction safeguard: cancelling compaction with no real conversation messages to summarize.
+```
+
+**Causa:** Pi (`@mariozechner/pi-coding-agent`) ha `keepRecentTokens: 20000` hardcoded come default. Con sessione voice xiaozhi tipica (~32K totali = ~15K system prompt + ~17K messaggi):
+
+- Pi cammina all'indietro nei messaggi cercando di accumulare 20K di "tail recente"
+- Trova solo 17K di messaggi → cutPoint = 0
+- `messagesToSummarize` = array vuoto
+- Safeguard cancella per "no real conversation messages"
+
+**SCOPERTA CHIAVE:** OpenClaw core **già supporta** l'override via config (`src/agents/pi-settings.ts:68`):
+
+```typescript
+const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
+```
+
+Path completo:
+
+```
+compactEmbeddedPiSession (compact.ts:540)
+  → createPreparedEmbeddedPiSettingsManager (pi-project-settings.ts:64)
+  → applyPiCompactionSettingsFromConfig (pi-settings.ts:56)
+  → settingsManager.applyOverrides({ compaction: { keepRecentTokens: 5000 } })
+  → Pi rispetta il nuovo valore
+```
+
+**Fix proposto (clean, isolato a xiaozhi):**
+
+1. **`extensions/xiaozhi/src/config.ts`**: aggiungere `compaction.keepRecentTokens` ai defaults (proposto: `5000`)
+2. **`extensions/xiaozhi/openclaw.plugin.json`**: dichiarare il campo nel manifest schema (ricordare F1: doppio livello!)
+3. **`extensions/xiaozhi/src/context-manager.ts`** in `maybeCompactSession`: clonare `cfg` (structuredClone), set `cfg.agents.defaults.compaction.keepRecentTokens = xiaozhiCompaction.keepRecentTokens`, passare il config clonato a `deps.compactEmbeddedPiSession({ config: clonedCfg, ... })`. Il config originale resta intatto, l'override si applica SOLO al call di compaction xiaozhi.
+
+**Risultato atteso con keepRecentTokens=5000:**
+
+- Sessione 32K → keepRecent 5K → ~12K di messaggi vecchi summarizable
+- Pi summarize → 5K recent + ~3K summary = 8K messaggi
+- Più system prompt 15K = ~23K totali post-compact
+- **Riduzione: 32K → 23K (~30%)**
+
+**Tuning:** valori più aggressivi (3K-2K) danno riduzioni 35-45% ma mantengono meno turni recenti in contesto. Per voice assistant 5K = ~25-30 turni recenti, dovrebbe bastare.
+
+**Vincolo del fix:** dato che Pi può summarizzare solo i `messages` (non il system prompt che è ~15K e immutabile), la riduzione massima teorica è ~50% del totale. Per scendere ulteriormente servirebbe tagliare il system prompt (fuori scope Plan 12).
+
+**Status:** fix pronto da implementare, non ancora committato. Da fare appena rientro al progetto.

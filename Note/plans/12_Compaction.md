@@ -589,30 +589,28 @@ Risultato: xiaozhi plugin carica `extensionAPI.js` via `core-bridge.ts:loadCoreA
 
 **Prova incrociata:** altri bundled hook come `boot-md` funzionano perché vengono chiamati dal gateway (`src/gateway/server-startup.ts:112`), usando `triggerInternalHook` importato da **entry.js** → stesso Map. Il nostro path invece attraversa `extensionAPI.js`.
 
-### TODO ripresa domani (2026-04-13)
+### Fix bundle-split + transcript lookup (2026-04-12) ✅ COMPLETATO
 
-**Opzione A — Shared registry via `globalThis`:**
-Spostare il Map su `globalThis[Symbol.for("openclaw.internalHooks.handlers")]` così entrambi i bundle vedono lo stesso stato. Patch minimale in `src/hooks/internal-hooks.ts`:
+**Problema 1 — Bundle split (hook handler non trovato):**
+`src/hooks/internal-hooks.ts` usava un `handlers: Map` module-scoped. La build produce `dist/entry.js` (gateway) e `dist/extensionAPI.js` (plugin), ciascuno con la propria copia del Map. Il gateway registrava `session-memory` nel suo Map; `resetEmbeddedPiSession` (importato da `extensionAPI.js`) chiamava `triggerInternalHook` sul Map vuoto del plugin → 0 handler → noop silenzioso.
+
+**Fix (commit `7b05d8016`):** Opzione A — shared registry via `globalThis`:
 
 ```ts
 const HANDLERS_SYMBOL = Symbol.for("openclaw.internalHooks.handlers");
-const handlers = ((globalThis as any)[HANDLERS_SYMBOL] ??= new Map<
+const handlers = ((globalThis as Record<symbol, unknown>)[HANDLERS_SYMBOL] ??= new Map<
   string,
   InternalHookHandler[]
->());
+>()) as Map<string, InternalHookHandler[]>;
 ```
 
-Zero cambi all'API. Rebuild `pnpm build` e retest. Rischio: qualsiasi altro singleton module-scoped nei hook subsystem (log logger, config cache) potrebbe avere lo stesso problema e richiedere lo stesso trattamento.
+`Symbol.for` è un symbol globale cross-bundle → entrambi i bundle puntano alla stessa Map su `globalThis`.
 
-**Opzione B — Esporre `triggerInternalHook` via `CoreAgentDeps`:**
-Far sì che xiaozhi non importi mai direttamente `triggerInternalHook` da `extensionAPI.js`. Invece, esporre una funzione `deps.triggerHook` nel `CoreAgentDeps` che _passa_ il call al Map del gateway. Problema: `resetEmbeddedPiSession` vive in `extensionAPI.js`, non nel gateway bundle. Richiede di spostare il trigger dentro un callback passato via deps, o di spostare `resetEmbeddedPiSession` nel gateway bundle e chiamarlo via RPC.
+**Problema 2 — Transcript non trovato (file memory vuoto):**
+L'handler `session-memory` cercava il transcript JSONL in `workspaceDir/sessions` (`~/.openclaw/workspace/sessions/`), ma i transcript embedded Pi vivono in `~/.openclaw/agents/main/sessions/`. Il `sessionFile` non è mai scritto nello store per sessioni embedded Pi, e il fallback `findPreviousSessionFile` cercava solo nella dir sbagliata.
 
-**Opzione C — Chiamata diretta al handler:**
-Bypassare completamente il registry: far chiamare a `resetEmbeddedPiSession` direttamente `saveSessionToMemory` (import da `src/hooks/bundled/session-memory/handler.ts`). Pro: risolve subito. Contro: rompe l'astrazione (altri hook registrati per `command/new` — es. `command-logger` — non vengono più invocati da qui), e se arriveranno nuovi handler per `command/new` in futuro non verranno attivati dal path xiaozhi.
+**Fix (commit `ee2fc5a77`):** aggiunto `resolveSessionTranscriptsDirForAgent(agentId)` come candidato in `sessionsDirs` nell'handler, prima del fallback `workspaceDir/sessions`.
 
-**Raccomandazione:** partire da **Opzione A** (è un one-liner, e se funziona risolve anche futuri bundle-split issue in altri hook subsystem). Se non basta, fallback su Opzione C come mitigazione mirata.
+**Test operativo:** rotation scatta, hook trova gli handler, transcript letto dalla dir corretta, summary LLM scritto in `memory/2026-04-12-pre-compaction-memory-flush.md` con contenuto conversazione completo e slug generato via LLM.
 
-### Cosa resta uguale
-
-- `resetEmbeddedPiSession` funziona correttamente: mint UUID, atomic store update, archive transcript. Solo l'hook trigger è inefficace.
-- Race condition doc'd sopra rimane (osservata in pratica: `42a93d39` era il file cached in audio-pipeline, ma store aveva già una UUID diversa per via di interferenza con un path diverso che tocca la legacy key `main`).
+**Nota bundle-split per il futuro:** qualsiasi singleton module-scoped (Map, Set, cache) in moduli importati da entrambi i bundle avrà lo stesso problema. Se serve stato condiviso cross-bundle, usare `globalThis[Symbol.for("...")]`. Attualmente solo `handlers` era critico; il `log` (subsystem logger) non ha stato condiviso che causa bug.

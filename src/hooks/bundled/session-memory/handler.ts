@@ -11,6 +11,7 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
+import { resolveSessionTranscriptsDirForAgent } from "../../../config/sessions/paths.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
@@ -207,6 +208,9 @@ const saveSessionToMemory: HookHandler = async (event) => {
       if (currentSessionFile) {
         sessionsDirs.add(path.dirname(currentSessionFile));
       }
+      // Agent transcript dir (e.g. ~/.openclaw/agents/main/sessions/) — this
+      // is where Pi embedded sessions write their .jsonl transcripts.
+      sessionsDirs.add(resolveSessionTranscriptsDirForAgent(agentId));
       sessionsDirs.add(path.join(workspaceDir, "sessions"));
 
       for (const sessionsDir of sessionsDirs) {

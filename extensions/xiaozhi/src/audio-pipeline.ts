@@ -714,8 +714,10 @@ export class AudioPipeline {
       return instant;
     }
 
-    // Step 3 — Tool intent detection: disable tools for pure conversation
-    const needsTools = hasToolIntent(text);
+    // Step 3 — Tools always enabled: the keyword router caused too many
+    // false negatives (blocked memory, web search, etc). If token usage
+    // becomes a problem, reimplement with inverse logic (block only greetings).
+    const needsTools = true;
 
     let deps: Awaited<ReturnType<typeof loadCoreAgentDeps>>;
     try {

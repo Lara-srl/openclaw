@@ -110,8 +110,13 @@ export interface InternalHookEvent {
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
 
-/** Registry of hook handlers by event key */
-const handlers = new Map<string, InternalHookHandler[]>();
+/** Registry of hook handlers by event key — shared via globalThis so both
+ *  dist/entry.js (gateway) and dist/extensionAPI.js (plugins) see the same Map. */
+const HANDLERS_SYMBOL = Symbol.for("openclaw.internalHooks.handlers");
+const handlers = ((globalThis as Record<symbol, unknown>)[HANDLERS_SYMBOL] ??= new Map<
+  string,
+  InternalHookHandler[]
+>()) as Map<string, InternalHookHandler[]>;
 const log = createSubsystemLogger("internal-hooks");
 
 /**

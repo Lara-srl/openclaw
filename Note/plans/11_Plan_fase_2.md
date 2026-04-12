@@ -134,6 +134,7 @@ export const AdaUiState = {
   THINKING: 300,
   ACTING: 400,
   SPEAKING: 500,
+  COMPACTION: 600,
   SHUTDOWN: 900,
 } as const;
 export type AdaUiStateCode = (typeof AdaUiState)[keyof typeof AdaUiState];
@@ -167,6 +168,8 @@ export function buildUiState(
 | `silentAck()`                                  | `buildUiState(IDLE)`                                    |
 | `onAbort()`                                    | `buildUiState(IDLE)`                                    |
 | Tool call futuri (tools.ts)                    | `buildUiState(ACTING, { icon: "..." })`                 |
+| Inizio compaction (rotation)                   | `buildUiState(COMPACTION, { text: "Organizzo..." })`    |
+| Fine compaction (rotation)                     | `buildUiState(IDLE)`                                    |
 
 **Regola**: `SET_UI` va inviato PRIMA del corrispondente frame `tts` per far transizionare la faccia prima dell'audio.
 
@@ -179,6 +182,58 @@ export function buildUiState(
 - Il firmware attuale ignora silenziosamente i `type: "SET_UI"` (tipo sconosciuto → log warning)
 
 **Complessità: S**
+
+---
+
+### Step 1 Addendum — Stato COMPACTION (codice 600)
+
+**Problema attuale**: durante la compaction/rotation della sessione, il codice invia `buildLlm("🔄 Sto organizzando i ricordi...")` al device via WebSocket, ma sullo schermo non compare niente. Il motivo e' che `buildLlm()` invia un frame `{"type":"llm","text":"..."}` che il firmware interpreta come testo di risposta LLM — visibile solo durante lo stato SPEAKING o in un'area testo attiva. Senza un cambio di stato display esplicito, il device resta in IDLE e ignora il testo.
+
+**Soluzione**: aggiungere lo stato `COMPACTION = 600` alla state machine UI. Quando il bridge avvia la rotation sessione, invia `SET_UI` con stato 600 prima del feedback testuale. A fine rotation, torna a IDLE (100).
+
+#### Dove avviene la compaction nel codice
+
+| File                                        | Funzione                      | Riga | Cosa fa                                                                            |
+| ------------------------------------------- | ----------------------------- | ---- | ---------------------------------------------------------------------------------- |
+| `extensions/xiaozhi/src/context-manager.ts` | `maybeRotateSession()`        | ~139 | Runner principale: debounce, legge token, chiama reset                             |
+| `extensions/xiaozhi/src/context-manager.ts` | `maybeRotateSession()`        | ~181 | Feedback inizio: `buildLlm("🔄 Sto organizzando...")` (DA SOSTITUIRE con SET_UI)   |
+| `extensions/xiaozhi/src/context-manager.ts` | `maybeRotateSession()`        | ~209 | Feedback fine OK: `buildLlm("✅ Ricordi organizzati!")` (DA SOSTITUIRE con SET_UI) |
+| `extensions/xiaozhi/src/audio-pipeline.ts`  | `pendingCompaction`           | ~543 | Trigger B: fire compaction DOPO TTS stop (post-response)                           |
+| `extensions/xiaozhi/src/audio-pipeline.ts`  | closure in `runAgent`         | ~829 | Crea la closure `pendingCompaction` con `maybeRotateSession`                       |
+| `extensions/xiaozhi/src/bridge.ts`          | `startNightlyCompaction()`    | ~44  | Trigger A: schedula nightly rotation alle 3:00                                     |
+| `extensions/xiaozhi/src/context-manager.ts` | `scheduleNightlyCompaction()` | ~394 | Timer setTimeout per trigger nightly                                               |
+
+#### Come implementare (con MCP server SET_UI)
+
+Quando `ui-state.ts` e il protocollo SET_UI saranno implementati (Step 1), modificare `context-manager.ts` `maybeRotateSession()`:
+
+```typescript
+// PRIMA (attuale — non funziona sul display):
+ws!.send(buildLlm("🔄 Sto organizzando i ricordi...", "neutral"));
+// ...rotation...
+ws!.send(buildLlm("✅ Ricordi organizzati!", "happy"));
+
+// DOPO (con SET_UI):
+ws!.send(buildUiState(AdaUiState.COMPACTION, { text: "Organizzo i ricordi..." }));
+// ...rotation...
+ws!.send(buildUiState(AdaUiState.IDLE));
+```
+
+#### Rendering LVGL suggerito (stato 600)
+
+- Icona cervello/memoria al centro (o animazione rotazione documenti)
+- Testo sotto: "Organizzo i ricordi..." (dal campo `text` di SET_UI)
+- Colore accent soft (viola/blu) — distingue da THINKING (spinner) che e' per l'LLM
+- Durata tipica: 5-15 secondi (dipende dalla velocita' del summary LLM)
+
+#### Parametro `ws` nel flusso
+
+Il WebSocket del device arriva a `maybeRotateSession` tramite il parametro `ws`:
+
+- **Trigger B** (post-response): `this.ws` dall'istanza `AudioPipeline` -> passato nella closure `pendingCompaction` (~riga 835)
+- **Trigger A** (nightly): `params.getActiveWs()` -> bridge.ts espone `this.firstActiveWs` (~riga 36)
+
+Se il device non e' connesso (`ws` null o non OPEN), il feedback viene silenziosamente saltato (gia' gestito con guard `wsOpen`).
 
 ---
 
@@ -272,15 +327,16 @@ Nel handler `ws.on("message")`: gestire risposte JSON-RPC (`jsonrpc: "2.0"` con 
 
 ### I 7 stati di Ada
 
-| Codice | Stato     | Rendering LVGL                                  |
-| ------ | --------- | ----------------------------------------------- |
-| 000    | BOOT      | Animazione apertura occhi + testo connessione   |
-| 100    | IDLE      | Occhi che battono (lv_anim opacity, 3s periodo) |
-| 200    | LISTENING | Onda sonora (lv_arc animato)                    |
-| 300    | THINKING  | Spinner (lv_spinner, 1s arco, 2s rotazione)     |
-| 400    | ACTING    | Icona tool al centro (camera/WA/Google/BT)      |
-| 500    | SPEAKING  | Equalizer 4 barre (lv_bar altezza animata)      |
-| 900    | SHUTDOWN  | Occhi che si chiudono → deep sleep              |
+| Codice | Stato      | Rendering LVGL                                  |
+| ------ | ---------- | ----------------------------------------------- |
+| 000    | BOOT       | Animazione apertura occhi + testo connessione   |
+| 100    | IDLE       | Occhi che battono (lv_anim opacity, 3s periodo) |
+| 200    | LISTENING  | Onda sonora (lv_arc animato)                    |
+| 300    | THINKING   | Spinner (lv_spinner, 1s arco, 2s rotazione)     |
+| 400    | ACTING     | Icona tool al centro (camera/WA/Google/BT)      |
+| 500    | SPEAKING   | Equalizer 4 barre (lv_bar altezza animata)      |
+| 600    | COMPACTION | Icona memoria/cervello + testo "Organizzo..."   |
+| 900    | SHUTDOWN   | Occhi che si chiudono → deep sleep              |
 
 ### File da creare (firmware)
 

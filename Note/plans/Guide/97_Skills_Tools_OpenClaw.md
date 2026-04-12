@@ -600,10 +600,51 @@ L'unica accortezza: aggiungere `"dieta"` ai `TOOL_INTENT_KEYWORDS` in `audio-pip
 
 ---
 
-## 10. Decisioni Aperte / TODO
+## 10. Tool e Voice System Prompt — Lezione Appresa
+
+### Problema (2026-04-12)
+
+I tool sono definiti in `TOOLS.md` e `SKILLS.md` (workspace) e l'agente voice li vede tutti (30+ tool disponibili). Tuttavia **Mistral Small non sceglie spontaneamente il tool corretto** per task ambigui come "salva nella memoria". Invece di chiamare `write`, allucina l'azione ("Fatto!") senza mai invocare il tool.
+
+### Causa root
+
+- `TOOLS.md`/`SKILLS.md` definiscono **cosa** fanno i tool (schema, parametri)
+- Il `VOICE_EXTRA_SYSTEM_PROMPT` deve dire **quando** usarli nel contesto vocale
+- Modelli piccoli (Mistral Small) con 30+ tool scelgono il path con meno attrito: fingere di aver fatto l'azione
+
+### Regola pratica
+
+**NON serve esplicitare tutti i tool nel voice prompt.** Aggiungere istruzioni esplicite solo per i tool dove il modello allucina invece di chiamarli. Tool con mapping ovvio (es. "che tempo fa" -> weather, "cerca su Google" -> web_search) funzionano senza istruzioni extra.
+
+### Fix applicato
+
+Aggiunto blocco `GESTIONE MEMORIA` nel `VOICE_EXTRA_SYSTEM_PROMPT` (`extensions/xiaozhi/src/audio-pipeline.ts` riga 29+):
+
+```
+GESTIONE MEMORIA — quando l'utente chiede di salvare/ricordare/memorizzare qualcosa:
+- Usa il tool "write" per scrivere nel file ~/.openclaw/workspace/memory/YYYY-MM-DD.md
+- NON fingere di aver salvato: devi SEMPRE chiamare il tool "write"
+- Per ricordare eventi passati: usa "memory_search" + "memory_get"
+```
+
+La riga chiave e' l'ultima: `NON fingere di aver salvato` — istruzione negativa esplicita che forza il modello a usare il tool.
+
+### Checklist per nuovi tool problematici
+
+1. Testare il tool a voce — se il modello dice "Fatto" senza tool call, serve istruzione esplicita
+2. Aggiungere nel `VOICE_EXTRA_SYSTEM_PROMPT` un blocco dedicato con:
+   - QUANDO usare il tool (trigger vocale)
+   - QUALE tool chiamare (nome esatto)
+   - Istruzione negativa ("NON fingere", "NON rispondere senza chiamare il tool")
+3. Se il tool richiede read/write, aggiungere le keyword al `TOOL_INTENT_KEYWORDS` per evitare `disableTools: true`
+
+---
+
+## 11. Decisioni Aperte / TODO
 
 - [ ] **Creare `skills/dieta/SKILL.md`** — il file effettivo (copia da sezione 8.2)
 - [ ] **Aggiungere keyword "dieta/pasto/mangiato"** a `TOOL_INTENT_KEYWORDS` in `audio-pipeline.ts` se serve tool intent per read/write
 - [ ] **Verificare se `disableTools: true` blocca read/write** — se sì, la skill dieta non funziona senza tool intent
 - [ ] **Skill filtraggio per voce** — valutare se passare `skillFilter` per ridurre token nel prompt voice
 - [ ] **Skill domotica** — prossima skill: comandi smart home via voce
+- [ ] **Monitorare tool allucinati** — testare periodicamente i tool voce con Mistral Small e aggiungere istruzioni esplicite quando necessario

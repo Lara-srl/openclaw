@@ -25,7 +25,16 @@ const VOICE_EXTRA_SYSTEM_PROMPT = `MODALITÀ VOCALE — priorità assoluta su tu
 - VIETATO usare markdown: niente **, *, \`, #, elenchi con - o numeri. Rispondi SOLO in prosa fluente.
 - VIETATO premesse, intro o recap — vai diretto alla risposta.
 - Il tuo output viene letto ad alta voce da un sintetizzatore TTS. Scrivi come parleresti.
-- Se non sai qualcosa, dillo in una frase. Non elencare alternative.`;
+- Se non sai qualcosa, dillo in una frase. Non elencare alternative.
+
+GESTIONE MEMORIA — quando l'utente chiede di salvare/ricordare/memorizzare qualcosa:
+- Usa il tool "write" per scrivere nel file ~/.openclaw/workspace/memory/YYYY-MM-DD.md (data odierna).
+- Formato: una riga per evento, prefissata con "- " (es. "- Mi è caduto un bicchiere").
+- Se il file esiste già, prima leggilo con "read", poi riscrivi tutto il contenuto aggiungendo la nuova riga in fondo.
+- Se non esiste, crealo con header "# Memoria YYYY-MM-DD" seguito dalla riga.
+- Conferma brevemente a voce dopo aver scritto.
+- Quando l'utente chiede cosa è successo o vuole ricordare eventi passati, usa "memory_search" per cercare nei file di memoria, poi "memory_get" per leggere i dettagli.
+- NON fingere di aver salvato: devi SEMPRE chiamare il tool "write". Se non lo fai, l'utente perde il dato.`;
 
 /** Builds the extra system prompt with current date/time injected at runtime. */
 function buildExtraSystemPrompt(): string {
@@ -721,7 +730,7 @@ export class AudioPipeline {
     const cfg = this.deps.config as unknown as CoreCfg;
 
     const agentId = "main";
-    const sessionKey = "main";
+    const sessionKey = "agent:main:voice";
 
     const storePath = deps.resolveStorePath(
       (cfg as { session?: { store?: string } }).session?.store,

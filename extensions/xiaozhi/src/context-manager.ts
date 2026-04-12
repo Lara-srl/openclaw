@@ -14,7 +14,7 @@
  * messaggi, il transcript vecchio viene archiviato come `.jsonl.reset.<ts>`,
  * e il prossimo turno voice parte con contesto pulito + `MEMORY.md`
  * auto-iniettato come bootstrap file (è first-class in `workspace.ts`, vedi
- * `MINIMAL_BOOTSTRAP_ALLOWLIST` — xiaozhi usa sessionKey="main" quindi NON
+ * `MINIMAL_BOOTSTRAP_ALLOWLIST` — xiaozhi usa sessionKey="agent:main:voice" quindi NON
  * viene filtrato).
  *
  * Due trigger combinati, entrambi POST-response (mai prima della risposta vocale):
@@ -246,7 +246,7 @@ export function resolveMainSessionContext(
 } | null {
   try {
     const agentId = "main";
-    const sessionKey = "main";
+    const sessionKey = "agent:main:voice";
     const storePath = deps.resolveStorePath(cfg.session?.store, { agentId });
     const sessionStore = deps.loadSessionStore(storePath);
     const entry = sessionStore[sessionKey] as { sessionId?: string } | undefined;

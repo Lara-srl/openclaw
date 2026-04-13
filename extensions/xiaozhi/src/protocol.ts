@@ -48,3 +48,5 @@ export function buildTts(state: "start" | "sentence_start" | "stop", text?: stri
   // B2: field name must be 'state', not 'action'
   return JSON.stringify({ type: "tts", state, ...(text ? { text } : {}) });
 }
+
+export { AdaUiState, buildUiState } from "./ui-state.js";

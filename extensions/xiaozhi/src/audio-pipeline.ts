@@ -15,6 +15,7 @@ import { readXiaozhiCompactionConfig } from "./config.js";
 import { maybeRotateSession } from "./context-manager.js";
 import { loadCoreAgentDeps } from "./core-bridge.js";
 import { buildLlm, buildStt, buildTts } from "./protocol.js";
+import { AdaUiState, buildUiState } from "./ui-state.js";
 
 // ─── Agent prompts ────────────────────────────────────────────────────────────
 
@@ -308,6 +309,7 @@ export class AudioPipeline {
     this.generation++;
     this.clearSpeakingTimer();
     this.state = "listening";
+    this.sendJson(buildUiState(AdaUiState.LISTENING));
     this.opusFrames = [];
     const modeTag = mode ? ` mode=${mode}` : "";
     const tag = prev === "idle" ? "start" : `interrupt (era: ${prev})`;
@@ -323,6 +325,7 @@ export class AudioPipeline {
     );
     if (this.state !== "listening") return;
     this.state = "processing";
+    this.sendJson(buildUiState(AdaUiState.THINKING, { text: "Sto pensando..." }));
     const frames = this.opusFrames;
     this.opusFrames = [];
     void this.process(frames, this.generation);
@@ -337,6 +340,7 @@ export class AudioPipeline {
       this.sendJson(buildTts("stop"));
     }
     this.state = "idle";
+    this.sendJson(buildUiState(AdaUiState.IDLE));
     this.opusFrames = [];
   }
 
@@ -539,6 +543,7 @@ export class AudioPipeline {
       }
 
       this.sendJson(buildTts("stop"));
+      this.sendJson(buildUiState(AdaUiState.IDLE));
       this.state = "idle";
       // device will automatically send listen:start (dialog mode)
 
@@ -559,6 +564,7 @@ export class AudioPipeline {
   private silentAck(): void {
     this.sendJson(buildTts("start"));
     this.sendJson(buildTts("stop"));
+    this.sendJson(buildUiState(AdaUiState.IDLE));
     this.state = "idle";
   }
 
@@ -655,6 +661,7 @@ export class AudioPipeline {
     // First chunk: transition to speaking state and open TTS stream on device.
     if (isFirst) {
       this.state = "speaking";
+      this.sendJson(buildUiState(AdaUiState.SPEAKING));
       this.sendJson(buildTts("start"));
     }
 
@@ -855,6 +862,9 @@ export class AudioPipeline {
 
   private sendJson(msg: string): void {
     if (this.ws.readyState === this.ws.OPEN) {
+      if (msg.includes('"SET_UI"')) {
+        console.log(`[XZ UI] → ${msg}`);
+      }
       this.ws.send(msg);
     }
   }

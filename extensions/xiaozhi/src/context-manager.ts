@@ -30,6 +30,7 @@ import fs from "node:fs/promises";
 import type { WebSocket } from "ws";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { buildLlm } from "./protocol.js";
+import { AdaUiState, buildUiState } from "./ui-state.js";
 
 const TAG = "[xiaozhi:context-manager]";
 
@@ -180,7 +181,9 @@ export async function maybeRotateSession(params: MaybeRotateParams): Promise<voi
   // Feedback schermo: inizio rotation
   if (wsOpen) {
     try {
-      ws!.send(buildLlm("🔄 Sto organizzando i ricordi...", "neutral"));
+      const frame = buildUiState(AdaUiState.COMPACTION, { text: "Organizzo i ricordi..." });
+      console.log(`${TAG} [UI] → ${frame}`);
+      ws!.send(frame);
     } catch {
       // non bloccante
     }
@@ -208,7 +211,9 @@ export async function maybeRotateSession(params: MaybeRotateParams): Promise<voi
     // Feedback schermo: fine OK
     if (wsOpen) {
       try {
-        ws!.send(buildLlm("✅ Ricordi organizzati!", "happy"));
+        const frame = buildUiState(AdaUiState.IDLE);
+        console.log(`${TAG} [UI] → ${frame}`);
+        ws!.send(frame);
       } catch {
         // non bloccante
       }

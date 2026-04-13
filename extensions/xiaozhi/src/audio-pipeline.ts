@@ -708,13 +708,10 @@ export class AudioPipeline {
     // current runAgent call will (re)assign it if compaction is enabled.
     this.pendingCompaction = null;
 
-    // Step 2 — Instant routing: bypass LLM for greetings, time, farewells
-    const instant = routeToInstant(text);
-    if (instant) {
-      // Feed entire response as a single token so the streaming TTS picks it up
-      onToken?.(instant);
-      return instant;
-    }
+    // Step 2 — Instant routing: disabled. The canned responses were too
+    // rigid (wrong meteo reply, stale greetings). The LLM handles all
+    // queries better, including greetings and time.
+    // const instant = routeToInstant(text);
 
     // Step 3 — Tools always enabled: the keyword router caused too many
     // false negatives (blocked memory, web search, etc). If token usage

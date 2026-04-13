@@ -100,6 +100,8 @@ function sanitizeForTts(text: string): string {
 
 **Complessità: S** (due edit in un solo file)
 
+**✅ FATTO — 2026-04-13** (3 commit: prompt vocale stretto, sanitizer TTS migliorato, instant router + meteo pattern disabilitati)
+
 ---
 
 ## Sub-fasi e ordine di esecuzione

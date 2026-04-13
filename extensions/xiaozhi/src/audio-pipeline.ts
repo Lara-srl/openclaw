@@ -102,14 +102,6 @@ const INSTANT_PATTERNS: InstantPattern[] = [
     re: /(che giorno è|che data è|data di oggi|che giorno è oggi)/,
     responses: [], // dynamic — filled at runtime
   },
-  {
-    // "che tempo fa", "com'è il meteo", "piove oggi" — no tool meteo disponibile
-    re: /(che tempo fa|meteo|previsioni|piove|pioverà|farà caldo|farà freddo|temperatura fuori)/,
-    responses: [
-      "Non ho accesso al meteo, mi dispiace! Prova a controllare su un'app.",
-      "Purtroppo non posso vedere il meteo. Controlla online!",
-    ],
-  },
 ];
 
 /**

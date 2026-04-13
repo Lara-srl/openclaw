@@ -241,6 +241,10 @@ ws!.send(buildUiState(AdaUiState.IDLE));
 
 **Complessità: S**
 
+**✅ FATTO — 2026-04-13** (1 commit: protocollo SET_UI con 8 stati, 6 seam points in audio-pipeline, 2 in context-manager compaction)
+
+- `d40748147d` feat(xiaozhi): add SET_UI frame protocol for device display states
+
 ---
 
 ## Step 2 — 2.2A: MCP Hardware Tool Registration (Firmware C++)

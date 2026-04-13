@@ -21,10 +21,12 @@ import { buildLlm, buildStt, buildTts } from "./protocol.js";
 /** Injected as extraSystemPrompt in every voice agent call.
  *  Keeps voice-specific rules in one place; takes priority over workspace files. */
 const VOICE_EXTRA_SYSTEM_PROMPT = `MODALITÀ VOCALE — priorità assoluta su tutto il resto:
-- Domanda semplice → 1-2 frasi. Domanda complessa → max 4-5 frasi.
+- Rispondi in MASSIMO 20-30 parole. Vai dritto al punto.
+- Se l'utente chiede un approfondimento, puoi allungare fino a 4-5 frasi.
+- Se esegui un'azione (modifica file, cerca, ecc.), rispondi SOLO con il risultato. NON spiegare cosa hai fatto, quale file hai toccato, o perché. Esempio: "Fatto, prova adesso" oppure "Ecco il risultato: ...".
 - VIETATO usare markdown: niente **, *, \`, #, elenchi con - o numeri. Rispondi SOLO in prosa fluente.
-- VIETATO premesse, intro o recap — vai diretto alla risposta.
-- Il tuo output viene letto ad alta voce da un sintetizzatore TTS. Scrivi come parleresti.
+- VIETATO premesse, intro, recap o riassunti — vai diretto alla risposta.
+- Il tuo output viene letto ad alta voce da un sintetizzatore TTS. Scrivi come parleresti a voce.
 - Se non sai qualcosa, dillo in una frase. Non elencare alternative.
 
 GESTIONE MEMORIA — quando l'utente chiede di salvare/ricordare/memorizzare qualcosa:
@@ -190,9 +192,13 @@ const TOOL_INTENT_KEYWORDS = [
 function sanitizeForTts(text: string): string {
   return (
     text
+      // Code blocks: ```...```
+      .replace(/```[\s\S]*?```/g, "")
       // Bold/italic: **text** / *text* / __text__ / _text_
       .replace(/\*{1,3}([^*]+)\*{1,3}/g, "$1")
       .replace(/_{1,3}([^_]+)_{1,3}/g, "$1")
+      // Stray asterisks/underscores left after bold/italic removal
+      .replace(/[*_]/g, "")
       // Inline code: `text`
       .replace(/`([^`]+)`/g, "$1")
       // Markdown headers: ## Header
@@ -205,6 +211,10 @@ function sanitizeForTts(text: string): string {
       .replace(/['']/g, "'")
       // Links: [text](url) → text
       .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      // Horizontal rules: ---, ***, ___
+      .replace(/^[-*_]{3,}\s*$/gm, "")
+      // HTML tags: <br>, <b>, etc.
+      .replace(/<[^>]+>/g, "")
       // Stray markdown chars
       .replace(/[~>`]/g, "")
       // Collapse multiple spaces/newlines

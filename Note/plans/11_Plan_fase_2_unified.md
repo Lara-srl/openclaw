@@ -102,6 +102,10 @@ function sanitizeForTts(text: string): string {
 
 **✅ FATTO — 2026-04-13** (3 commit: prompt vocale stretto, sanitizer TTS migliorato, instant router + meteo pattern disabilitati)
 
+- `c4f0ca8218` fix(xiaozhi): tighten voice prompt and improve TTS sanitizer
+- `2083aca668` fix(xiaozhi): remove meteo instant-router pattern — LLM handles it better
+- `a28c420904` fix(xiaozhi): disable instant router — LLM handles all queries better
+
 ---
 
 ## Sub-fasi e ordine di esecuzione

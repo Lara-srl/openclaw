@@ -284,6 +284,57 @@ Riferimento protocollo MCP: https://github.com/78/xiaozhi-esp32/blob/main/docs/m
 
 **Complessità: M**
 
+**✅ FATTO — 2026-04-14** (firmware compilato e flashato su SenseCAP Watcher, tool registrati e verificati nel serial monitor)
+
+#### Modifiche applicate (nel progetto ESP-IDF sulla VM firmware, NON in Note/main/)
+
+**File 1: `main/led/single_led.h`** — Resi public 6 metodi LED (erano private):
+
+```cpp
+// Spostati da private a public (dopo OnStateChanged):
+void SetColor(uint8_t r, uint8_t g, uint8_t b);
+void TurnOn();
+void TurnOff();
+void BlinkOnce();
+void Blink(int times, int interval_ms);
+void StartContinuousBlink(int interval_ms);
+```
+
+**File 2: `main/boards/sensecap-watcher/sensecap_watcher.cc`** — 4 modifiche:
+
+1. **Include aggiunto** (dopo `#include "assets/lang_config.h"`):
+
+```cpp
+#include "mcp_server.h"
+```
+
+2. **Membro privato aggiunto** (dopo `SscmaCamera* camera_ = nullptr;`):
+
+```cpp
+esp_timer_handle_t led_duration_timer_ = nullptr;
+```
+
+3. **Metodo `InitializeTools()`** aggiunto nella sezione private — crea un `esp_timer` one-shot per auto-restore LED e registra 3 tool MCP:
+
+- **`self.led.set`**: params `hex_color` (string 6 hex), `mode` (static/pulse/blink, default static), `duration_ms` (0-60000, default 0). Parse hex → `SetColor(r,g,b)` → static=`TurnOn()`, pulse=`StartContinuousBlink(500)`, blink=`StartContinuousBlink(200)`. Se duration>0, `esp_timer_start_once()` → al fire chiama `OnStateChanged()` (ripristina stato device).
+- **`self.haptic.feedback`**: param `pattern` (short/double/long). Mapping: short→`OGG_VIBRATION`, double→`OGG_EXCLAMATION`, long→`OGG_SUCCESS`. Chiama `Application::GetInstance().PlaySound(sound)`.
+- **`self.sensor.read`**: nessun param. Ritorna `cJSON*` con `battery_pct` (int), `charging` (bool), `volume` (int). Usa `GetBatteryLevel()` + `GetAudioCodec()->output_volume()`.
+
+4. **Costruttore** — aggiunto `InitializeTools();` come ultima chiamata dopo `InitializeCamera();`.
+
+#### Verifica serial monitor (log boot)
+
+```
+I (1841) MCP: Add tool: self.led.set
+I (1841) SscmaCamera: SSCMA restarted detected
+I (1851) MCP: Add tool: self.haptic.feedback
+I (1851) MCP: Add tool: self.sensor.read
+```
+
+#### Nota
+
+I tool sono registrati nel firmware MCP ma l'LLM non li invoca ancora — serve Step 3 (2.2B Bridge Tool Handlers) per il ponte gateway↔device via MCP JSON-RPC.
+
 ---
 
 ## Step 3 — 2.2B: Bridge Tool Handlers (TypeScript)

@@ -37,4 +37,21 @@ export type XiaozhuMessage = {
   emotion?: string;
   /** For type:"audio" — raw Opus frame buffer (protocol v1, no header) */
   payload?: Buffer;
+  /** For type:"mcp" — parsed JSON-RPC response from device. */
+  mcpPayload?: McpJsonRpcResponse;
+};
+
+/** JSON-RPC 2.0 response from device MCP tool call. */
+export type McpJsonRpcResponse = {
+  jsonrpc: "2.0";
+  id: number;
+  result?: { content: Array<{ type: string; text: string }>; isError: boolean };
+  error?: { code: number; message: string };
+};
+
+/** Pending MCP call awaiting device response. */
+export type McpPendingCall = {
+  resolve: (value: unknown) => void;
+  reject: (reason: unknown) => void;
+  timer: ReturnType<typeof setTimeout>;
 };

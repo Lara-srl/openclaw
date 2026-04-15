@@ -1,4 +1,4 @@
-import type { XiaozhuMessage } from "./types.js";
+import type { McpJsonRpcResponse, XiaozhuMessage } from "./types.js";
 
 /**
  * Parse a raw WebSocket message from a XiaoZhi device.
@@ -10,7 +10,12 @@ export function parseMessage(data: string | Buffer): XiaozhuMessage {
     return { type: "audio", payload: data };
   }
   const text = typeof data === "string" ? data : data.toString("utf8");
-  return JSON.parse(text) as XiaozhuMessage;
+  const raw = JSON.parse(text) as Record<string, unknown>;
+  // MCP JSON-RPC responses: extract nested payload for bridge dispatch.
+  if (raw.type === "mcp" && raw.payload && typeof raw.payload === "object") {
+    return { type: "mcp", mcpPayload: raw.payload as McpJsonRpcResponse };
+  }
+  return raw as XiaozhuMessage;
 }
 
 /**
@@ -47,6 +52,20 @@ export function buildLlm(text: string, emotion = "neutral"): string {
 export function buildTts(state: "start" | "sentence_start" | "stop", text?: string): string {
   // B2: field name must be 'state', not 'action'
   return JSON.stringify({ type: "tts", state, ...(text ? { text } : {}) });
+}
+
+/** Build an MCP JSON-RPC request frame to send to the device. */
+export function buildMcpRequest(
+  sessionId: string,
+  id: number,
+  method: string,
+  params: Record<string, unknown>,
+): string {
+  return JSON.stringify({
+    session_id: sessionId,
+    type: "mcp",
+    payload: { jsonrpc: "2.0", method, params, id },
+  });
 }
 
 export { AdaUiState, buildUiState } from "./ui-state.js";

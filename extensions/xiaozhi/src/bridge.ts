@@ -10,8 +10,8 @@ import {
   stopNightlyCompaction,
 } from "./context-manager.js";
 import { loadCoreAgentDeps, type CoreConfig } from "./core-bridge.js";
-import { buildHello, parseMessage } from "./protocol.js";
-import type { BridgeDeps, DeviceSession } from "./types.js";
+import { buildHello, buildMcpRequest, parseMessage } from "./protocol.js";
+import type { BridgeDeps, DeviceSession, McpJsonRpcResponse, McpPendingCall } from "./types.js";
 
 export class XiaozhiBridge {
   private sessions = new Map<string, DeviceSession>();
@@ -20,6 +20,10 @@ export class XiaozhiBridge {
   private pendingTts = new Map<string, Buffer[]>();
   /** Set when nightly scheduler is active. Cleared on stop(). */
   private nightlyScheduled = false;
+  /** MCP JSON-RPC request counter (auto-incrementing). */
+  private mcpRequestId = 0;
+  /** Pending MCP calls awaiting device response, keyed by JSON-RPC id. */
+  private pendingMcpCalls = new Map<number, McpPendingCall>();
 
   constructor(private deps: BridgeDeps) {
     this.wss = new WebSocketServer({ noServer: true });
@@ -67,6 +71,91 @@ export class XiaozhiBridge {
       getSessionContext: () => resolveMainSessionContext(deps, cfg),
     });
     this.nightlyScheduled = true;
+  }
+
+  /** Send a JSON string to the first active (OPEN) device session. */
+  sendToActiveSession(json: string): boolean {
+    const ws = this.getActiveWs();
+    if (!ws) return false;
+    ws.send(json);
+    return true;
+  }
+
+  /**
+   * Send an MCP JSON-RPC request to the device and await the response.
+   * Resolves with the result content or rejects on timeout/error.
+   */
+  callDeviceMcp(
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs = 5000,
+  ): Promise<unknown> {
+    const ws = this.getActiveWs();
+    if (!ws) return Promise.reject(new Error("No device connected"));
+
+    // Find session id for the active WS
+    let sessionId = "";
+    for (const s of this.sessions.values()) {
+      if (s.ws === ws) {
+        sessionId = s.id;
+        break;
+      }
+    }
+
+    const id = ++this.mcpRequestId;
+    const frame = buildMcpRequest(sessionId, id, method, params);
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingMcpCalls.delete(id);
+        reject(new Error(`MCP call timeout after ${timeoutMs}ms (id=${id})`));
+      }, timeoutMs);
+
+      this.pendingMcpCalls.set(id, { resolve, reject, timer });
+      ws.send(frame);
+      console.log(`[XZ bridge] MCP request id=${id} method=${method}`);
+    });
+  }
+
+  /** Resolve/reject a pending MCP call based on the device JSON-RPC response. */
+  private handleMcpResponse(response: McpJsonRpcResponse): void {
+    const pending = this.pendingMcpCalls.get(response.id);
+    if (!pending) {
+      console.log(`[XZ bridge] MCP response id=${response.id} — no pending call (stale/duplicate)`);
+      return;
+    }
+    this.pendingMcpCalls.delete(response.id);
+    clearTimeout(pending.timer);
+
+    if (response.error) {
+      console.log(`[XZ bridge] MCP response id=${response.id} error: ${response.error.message}`);
+      pending.reject(new Error(response.error.message));
+      return;
+    }
+
+    // Extract text from MCP result content array
+    const text = response.result?.content?.[0]?.text;
+    console.log(`[XZ bridge] MCP response id=${response.id} ok`);
+
+    // Try to parse JSON text result, fall back to raw text
+    if (text) {
+      try {
+        pending.resolve(JSON.parse(text));
+      } catch {
+        pending.resolve(text);
+      }
+    } else {
+      pending.resolve(response.result);
+    }
+  }
+
+  /** Reject all pending MCP calls (e.g. on device disconnect). */
+  private rejectAllPendingMcp(reason: string): void {
+    for (const [id, call] of this.pendingMcpCalls) {
+      clearTimeout(call.timer);
+      call.reject(new Error(reason));
+      this.pendingMcpCalls.delete(id);
+    }
   }
 
   /**
@@ -143,6 +232,9 @@ export class XiaozhiBridge {
             if (msg.state === "stop") pipeline.onListenStop(msg.mode);
             break;
           }
+          case "mcp":
+            if (msg.mcpPayload) this.handleMcpResponse(msg.mcpPayload);
+            break;
           case "abort":
             console.log(`[XZ bridge] abort`);
             pipeline.onAbort();
@@ -175,6 +267,7 @@ export class XiaozhiBridge {
       // B8: implicit listen:stop on abnormal close (device disconnects instead
       // of sending listen:stop — listen:stop is lost in the TCP RST race).
       pipeline.flushOnDisconnect();
+      this.rejectAllPendingMcp("Device disconnected");
       this.sessions.delete(sessionId);
       console.log(
         `[xiaozhi] disconnected session=${sessionId} code=${code} reason=${reason.toString()}`,
@@ -184,6 +277,7 @@ export class XiaozhiBridge {
     ws.on("error", (err) => {
       clearInterval(keepalive);
       pipeline.flushOnDisconnect();
+      this.rejectAllPendingMcp("Device connection error");
       this.sessions.delete(sessionId);
       console.error(`[xiaozhi] ws error session=${sessionId}`, err);
     });

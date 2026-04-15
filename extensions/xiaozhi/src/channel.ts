@@ -15,15 +15,18 @@ export type ResolvedXiaozhuAccount = {
 const DEFAULT_ACCOUNT_ID = "default";
 
 // ─── Bridge reference (set by index.ts when service starts) ───────────────────
+// Process-global via Symbol.for so the bridge is reachable across module-loader
+// contexts (the gateway sets it in one jiti instance; resolvePluginTools may load
+// channel.ts in a different module instance during agent tool resolution).
 
-let activeBridge: XiaozhiBridge | null = null;
+const BRIDGE_KEY = Symbol.for("openclaw.xiaozhi.bridge");
 
 export function setActiveBridge(bridge: XiaozhiBridge | null): void {
-  activeBridge = bridge;
+  (globalThis as Record<symbol, unknown>)[BRIDGE_KEY] = bridge;
 }
 
 export function getActiveBridge(): XiaozhiBridge | null {
-  return activeBridge;
+  return ((globalThis as Record<symbol, unknown>)[BRIDGE_KEY] as XiaozhiBridge | null) ?? null;
 }
 
 // ─── Config adapter ───────────────────────────────────────────────────────────
@@ -100,7 +103,7 @@ export const xiaozhiChannelPlugin: ChannelPlugin<ResolvedXiaozhuAccount> = {
 
   status: {
     buildChannelSummary({ account }) {
-      const bridge = activeBridge;
+      const bridge = getActiveBridge();
       return {
         accountId: account.accountId,
         enabled: account.enabled,

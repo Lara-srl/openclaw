@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { XiaozhiBridge } from "./bridge.js";
+import { getActiveBridge } from "./channel.js";
 import { AdaUiState, buildUiState } from "./ui-state.js";
 
 const ok = (payload: unknown) => ({
@@ -13,8 +14,12 @@ const notConnected = () => ok({ ok: false, error: "No LaraGoci device connected"
 /** Register all LaraGoci MCP tools on the plugin API. */
 export function registerLaragociTools(
   api: OpenClawPluginApi,
-  getBridge: () => XiaozhiBridge | null,
+  _getBridge: () => XiaozhiBridge | null,
 ): void {
+  // Use module-level singleton from channel.ts instead of the closure-captured
+  // getBridge — the closure's `runtime` is null when tools are loaded fresh
+  // by resolvePluginTools() in a separate plugin-registry cache context.
+  const getBridge = (): XiaozhiBridge | null => getActiveBridge();
   api.registerTool({
     name: "laragoci_status",
     label: "LaraGoci Status",

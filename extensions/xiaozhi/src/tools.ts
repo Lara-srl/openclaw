@@ -79,10 +79,9 @@ export function registerLaragociTools(
           name: "self.audio_speaker.set_volume",
           arguments: { volume: params.level },
         });
-        bridge.sendToActiveSession(buildUiState(AdaUiState.IDLE));
+        // No IDLE here — pipeline sends IDLE at end of turn; hardware effects persist.
         return ok({ ok: true, level: params.level, result });
       } catch (err) {
-        bridge.sendToActiveSession(buildUiState(AdaUiState.IDLE));
         return ok({ ok: false, error: String(err) });
       }
     },
@@ -139,10 +138,9 @@ export function registerLaragociTools(
             duration_ms: params.duration_ms ?? 0,
           },
         });
-        bridge.sendToActiveSession(buildUiState(AdaUiState.IDLE));
+        // No IDLE here — pipeline sends IDLE at end of turn; LED timer persists firmware-side.
         return ok({ ok: true, color: params.hex_color, mode: params.mode ?? "static", result });
       } catch (err) {
-        bridge.sendToActiveSession(buildUiState(AdaUiState.IDLE));
         return ok({ ok: false, error: String(err) });
       }
     },
@@ -214,16 +212,110 @@ export function registerLaragociTools(
           "tools/call",
           {
             name: "self.camera.take_photo",
-            arguments: { question: params.question ?? "Describe what you see." },
+            arguments: {},
           },
-          10_000, // Camera + vision API needs longer timeout
+          10_000, // Camera capture needs longer timeout
         );
-        bridge.sendToActiveSession(buildUiState(AdaUiState.IDLE));
-        return ok({ ok: true, result });
+
+        // Bug 3B fix: analyze image with Pixtral vision model.
+        // Device returns JPEG base64 in MCP result — main LLM (mistral-small) is not multimodal.
+        const imageBase64 = extractImageBase64(result);
+        let description: string | null = null;
+        if (imageBase64) {
+          bridge.sendToActiveSession(buildUiState(AdaUiState.ACTING, { text: "Analizzo..." }));
+          description = await analyzeImageWithPixtral(
+            imageBase64,
+            params.question ?? "Describe what you see in detail.",
+          );
+        }
+
+        return ok({
+          ok: true,
+          description: description ?? "Photo taken but vision analysis unavailable.",
+          question: params.question ?? "Describe what you see.",
+          rawResult: imageBase64 ? "(image analyzed)" : result,
+        });
       } catch (err) {
-        bridge.sendToActiveSession(buildUiState(AdaUiState.IDLE));
         return ok({ ok: false, error: String(err) });
       }
     },
   });
+}
+
+// ─── Vision helpers (Bug 3B) ─────────────────────────────────────────────────
+
+/** Extract base64 JPEG from device MCP result (various shapes). */
+function extractImageBase64(result: unknown): string | null {
+  if (!result || typeof result !== "object") return null;
+  const r = result as Record<string, unknown>;
+  // Direct base64 field
+  if (typeof r.image === "string") return r.image;
+  if (typeof r.image_base64 === "string") return r.image_base64;
+  if (typeof r.jpeg === "string") return r.jpeg;
+  // Nested in content array (MCP standard)
+  if (Array.isArray(r.content)) {
+    for (const item of r.content) {
+      if (item && typeof item === "object") {
+        const c = item as Record<string, unknown>;
+        if (c.type === "image" && typeof c.data === "string") return c.data;
+        // Text field may contain raw base64
+        if (c.type === "text" && typeof c.text === "string" && c.text.length > 500) {
+          // Heuristic: long text-only content is likely base64
+          if (/^[A-Za-z0-9+/=\s]+$/.test(c.text.slice(0, 200))) return c.text.trim();
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** Call Pixtral vision model to analyze a base64 JPEG image. */
+async function analyzeImageWithPixtral(
+  imageBase64: string,
+  question: string,
+): Promise<string | null> {
+  const apiKey = process.env.MISTRAL_API_KEY;
+  if (!apiKey) {
+    console.warn("[laragoci_photo] MISTRAL_API_KEY not set — skipping vision analysis");
+    return null;
+  }
+
+  try {
+    const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "pixtral-large-latest",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image_url",
+                image_url: { url: `data:image/jpeg;base64,${imageBase64}` },
+              },
+              { type: "text", text: question },
+            ],
+          },
+        ],
+        max_tokens: 512,
+      }),
+    });
+
+    if (!res.ok) {
+      console.error(`[laragoci_photo] Pixtral vision HTTP ${res.status}:`, await res.text());
+      return null;
+    }
+
+    const json = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    return json.choices?.[0]?.message?.content ?? null;
+  } catch (err) {
+    console.error("[laragoci_photo] Pixtral vision error:", err);
+    return null;
+  }
 }

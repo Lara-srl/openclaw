@@ -102,9 +102,9 @@ function sanitizeForTts(text: string): string {
 
 **✅ FATTO — 2026-04-13** (3 commit: prompt vocale stretto, sanitizer TTS migliorato, instant router + meteo pattern disabilitati)
 
-- `c4f0ca8218` fix(xiaozhi): tighten voice prompt and improve TTS sanitizer
-- `2083aca668` fix(xiaozhi): remove meteo instant-router pattern — LLM handles it better
-- `a28c420904` fix(xiaozhi): disable instant router — LLM handles all queries better
+- [`c4f0ca8218`](https://github.com/openclaw/openclaw/commit/c4f0ca8218) fix(xiaozhi): tighten voice prompt and improve TTS sanitizer
+- [`2083aca668`](https://github.com/openclaw/openclaw/commit/2083aca668) fix(xiaozhi): remove meteo instant-router pattern — LLM handles it better
+- [`a28c420904`](https://github.com/openclaw/openclaw/commit/a28c420904) fix(xiaozhi): disable instant router — LLM handles all queries better
 
 ---
 
@@ -243,7 +243,7 @@ ws!.send(buildUiState(AdaUiState.IDLE));
 
 **✅ FATTO — 2026-04-13** (1 commit: protocollo SET_UI con 8 stati, 6 seam points in audio-pipeline, 2 in context-manager compaction)
 
-- `d40748147d` feat(xiaozhi): add SET_UI frame protocol for device display states
+- [`d40748147d`](https://github.com/openclaw/openclaw/commit/d40748147d) feat(xiaozhi): add SET_UI frame protocol for device display states
 
 ---
 
@@ -252,6 +252,7 @@ ws!.send(buildUiState(AdaUiState.IDLE));
 **Obiettivo**: registrare 3 nuovi MCP tool nel firmware SenseCAP Watcher, invocabili dall'LLM.
 
 Riferimento protocollo MCP: https://github.com/78/xiaozhi-esp32/blob/main/docs/mcp-protocol.md
+Riferimenoto piano claude : /home/openclaw/.claude/plans/lucky-hopping-parnas.md
 
 ### Tool 1 — `self.led.set`
 
@@ -342,6 +343,15 @@ I tool sono registrati nel firmware MCP ma l'LLM non li invoca ancora — serve 
 **Obiettivo**: promuovere gli stub tool in `tools.ts` a implementazioni reali che comunicano col device.
 
 Riferimento integrazione MCP: https://github.com/78/xiaozhi-esp32/blob/main/docs/mcp-usage.md
+riferimento plna openclaw: /home/openclaw/.claude/plans/wondrous-gathering-bengio.md
+
+**✅ FATTO — 2026-04-16** (3 commit: MCP JSON-RPC bridge + tool handlers + singleton fix per routing tool)
+
+- [`5630288dda`](https://github.com/openclaw/openclaw/commit/5630288dda) feat(xiaozhi): add MCP bridge tool handlers for device hardware control
+- [`14f20a681f`](https://github.com/openclaw/openclaw/commit/14f20a681f) fix(xiaozhi): use module-level bridge singleton for tool execution
+- [`24557757a0`](https://github.com/openclaw/openclaw/commit/24557757a0) fix(xiaozhi): use process-global bridge ref via Symbol.for
+
+**Verificato funzionante** — L'LLM invoca i tool hardware (LED, haptic, sensor, volume, emoji, foto, status) e il device esegue i comandi correttamente. Il fix `Symbol.for` risolve il problema del bridge singleton tra bundle separati (entry.js / extensionAPI.js).
 
 ### Aggiunte a `extensions/xiaozhi/src/bridge.ts`
 
@@ -377,6 +387,45 @@ Nel handler `ws.on("message")`: gestire risposte JSON-RPC (`jsonrpc: "2.0"` con 
 - `extensions/xiaozhi/src/bridge.ts`
 - `extensions/xiaozhi/src/tools.ts`
 - `extensions/xiaozhi/src/types.ts` — tipo `McpPendingCall`
+
+### Bug noti
+
+#### Bug 3A: Effetti tool hardware legati al ciclo di vita della risposta LLM
+
+**Problema**: tutti i comandi hardware (LED, haptic, volume, emoji) vengono resettati quando la risposta dell'LLM finisce, invece di persistere per la durata richiesta. Esempio: "tieni acceso il LED verde per 10 secondi" → il LED si accende ma si spegne a fine risposta (~2-3s), non dopo 10s.
+
+**✅ FATTO — 2026-04-16** (4 commit: deferred execution post-IDLE, persist flag, hw effect restore, repeat parameter)
+
+- [`1dda2d9529`](https://github.com/openclaw/openclaw/commit/1dda2d9529) fix(xiaozhi): decouple hardware effects from LLM turn lifecycle and add Pixtral vision to photo tool
+- [`816772cfdc`](https://github.com/openclaw/openclaw/commit/816772cfdc) fix(xiaozhi): persist hardware effects across SET_UI state resets (Bug 3A) and restore photo question arg
+- [`3e6ce7cf7e`](https://github.com/openclaw/openclaw/commit/3e6ce7cf7e) fix(xiaozhi): trigger hw effect restore from pipeline sendJson, not just bridge
+- [`fde8e2d642`](https://github.com/openclaw/openclaw/commit/fde8e2d642) fix(xiaozhi): defer LED/haptic/play execution to post-IDLE and use agent pipeline for photo vision
+- [`a9cdc02e00`](https://github.com/openclaw/openclaw/commit/a9cdc02e00) fix(xiaozhi): add repeat parameter to haptic and play tools
+
+**Soluzione adottata**: mix di Opzione A + C. I tool hardware non eseguono più durante il turno LLM — vengono accodati come `DeferredHwAction` e eseguiti **dopo** che il device torna in IDLE (post-TTS). Gli effetti persistenti (LED) vengono ri-applicati dopo ogni `SET_UI IDLE` reset. Haptic/play sono fire-and-forget con `persist: false`. Il parametro `repeat` (1-20) permette all'LLM di specificare quante volte ripetere, con 400ms di delay tra azioni.
+
+Guida architetturale: [`Note/plans/Guide/camera-vision-proxy.md`](Note/plans/Guide/camera-vision-proxy.md)
+
+#### Bug 3B: Foto scattata ma LLM non può analizzarla (modello visione mancante)
+
+**Problema**: il tool `laragoci_photo` scatta la foto con successo (il device esegue `self.camera.take_photo` e ritorna il JPEG), ma l'LLM risponde che non può analizzare l'immagine perché non ha un modello di visione configurato. Mistral `mistral-small-latest` non è multimodale.
+
+**✅ FATTO — 2026-04-16** (3 commit: vision proxy HTTP endpoint, URL fix tunnel Cloudflare, multipart parser fix)
+
+- [`1dda2d9529`](https://github.com/openclaw/openclaw/commit/1dda2d9529) fix(xiaozhi): decouple hardware effects from LLM turn lifecycle and add Pixtral vision to photo tool
+- [`fde8e2d642`](https://github.com/openclaw/openclaw/commit/fde8e2d642) fix(xiaozhi): defer LED/haptic/play execution to post-IDLE and use agent pipeline for photo vision
+- [`61d13c783e`](https://github.com/openclaw/openclaw/commit/61d13c783e) feat(xiaozhi): add vision proxy for camera photo analysis via Pixtral
+
+**Soluzione adottata**: Opzione A — vision proxy HTTP. Il bridge invia l'URL `https://laragoci.lara-ai.eu/xiaozhi/vision` al firmware via MCP `initialize`. Il firmware cattura il JPEG, lo POSTa al proxy via tunnel Cloudflare. Il proxy (`vision-proxy.ts`) analizza l'immagine con `pixtral-large-latest` via `runEmbeddedPiAgent` e ritorna la descrizione testuale al firmware, che la passa come risultato MCP al gateway.
+
+Bug risolti durante l'integrazione:
+
+- URL vision: da `localhost:18789` a URL tunnel Cloudflare (device non raggiunge localhost)
+- Campo multipart: firmware manda `name="file"`, proxy aspettava `name="image"`
+- Regex greedy: `.*name=` matchava `filename=` invece del primo `name=` → fix con `.*?`
+- Cache jiti: `/tmp/jiti/` cachava il vecchio codice transpilato dei plugin
+
+Guida architetturale: [`Note/plans/Guide/camera-vision-proxy.md`](Note/plans/Guide/camera-vision-proxy.md)
 
 ### Verifica
 

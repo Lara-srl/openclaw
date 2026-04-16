@@ -87,6 +87,26 @@ const XiaozhuCompactionSchema = z
   .strict()
   .default(XIAOZHI_COMPACTION_DEFAULTS);
 
+// ─── Personality config ──────────────────────────────────────────────────────
+
+export const XIAOZHI_PERSONALITY_DEFAULTS = {
+  name: "Ada",
+  language: "it",
+  prompt: null as string | null,
+} as const;
+
+const XiaozhuPersonalitySchema = z
+  .object({
+    /** Assistant name used in identity prompt and instant responses. */
+    name: z.string().min(1).default(XIAOZHI_PERSONALITY_DEFAULTS.name),
+    /** Locale for date/time formatting (BCP 47). */
+    language: z.string().min(1).default(XIAOZHI_PERSONALITY_DEFAULTS.language),
+    /** null = built-in identity prompt; string = full custom override. */
+    prompt: z.string().nullable().default(XIAOZHI_PERSONALITY_DEFAULTS.prompt),
+  })
+  .strict()
+  .default(XIAOZHI_PERSONALITY_DEFAULTS);
+
 export const XiaozhuConfigSchema = z
   .object({
     enabled: z.boolean().default(true),
@@ -100,11 +120,14 @@ export const XiaozhuConfigSchema = z
     compaction: XiaozhuCompactionSchema,
     /** Override URL for the vision proxy endpoint (default: http://localhost:18789/xiaozhi/vision). */
     visionUrl: z.string().optional(),
+    /** Voice assistant identity: name, language, custom prompt. */
+    personality: XiaozhuPersonalitySchema,
   })
   .strict();
 
 export type XiaozhuConfig = z.infer<typeof XiaozhuConfigSchema>;
 export type XiaozhuCompactionConfig = XiaozhuConfig["compaction"];
+export type XiaozhuPersonalityConfig = XiaozhuConfig["personality"];
 
 export function parseXiaozhuConfig(value: unknown): XiaozhuConfig {
   const raw =
@@ -158,5 +181,23 @@ export function readXiaozhiCompactionConfig(cfg: unknown): XiaozhuCompactionConf
     return parsed.compaction;
   } catch {
     return XiaozhuConfigSchema.parse({}).compaction;
+  }
+}
+
+/** Read personality config from xiaozhi plugin config. Never throws. */
+export function readXiaozhiPersonalityConfig(cfg: unknown): XiaozhuPersonalityConfig {
+  try {
+    const plugins = (cfg as Record<string, unknown> | undefined)?.plugins as
+      | Record<string, unknown>
+      | undefined;
+    const entries = plugins?.entries as Record<string, unknown> | undefined;
+    const xiaozhiEntry = entries?.xiaozhi as Record<string, unknown> | undefined;
+    const nestedConfig = xiaozhiEntry?.config as Record<string, unknown> | undefined;
+    const candidate =
+      nestedConfig ?? xiaozhiEntry ?? (plugins?.xiaozhi as Record<string, unknown> | undefined);
+    const parsed = parseXiaozhuConfig(candidate);
+    return parsed.personality;
+  } catch {
+    return XiaozhuConfigSchema.parse({}).personality;
   }
 }

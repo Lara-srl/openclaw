@@ -12,7 +12,11 @@ import { OpusEncoder } from "@discordjs/opus";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
 import type { WebSocket } from "ws";
 import { getActiveBridge } from "./channel.js";
-import { readXiaozhiCompactionConfig } from "./config.js";
+import {
+  type XiaozhuPersonalityConfig,
+  readXiaozhiCompactionConfig,
+  readXiaozhiPersonalityConfig,
+} from "./config.js";
 import { maybeRotateSession } from "./context-manager.js";
 import { loadCoreAgentDeps } from "./core-bridge.js";
 import { buildLlm, buildStt, buildTts } from "./protocol.js";
@@ -40,9 +44,18 @@ GESTIONE MEMORIA — quando l'utente chiede di salvare/ricordare/memorizzare qua
 - Quando l'utente chiede cosa è successo o vuole ricordare eventi passati, usa "memory_search" per cercare nei file di memoria, poi "memory_get" per leggere i dettagli.
 - NON fingere di aver salvato: devi SEMPRE chiamare il tool "write". Se non lo fai, l'utente perde il dato.`;
 
-/** Builds the extra system prompt with current date/time injected at runtime. */
-function buildExtraSystemPrompt(): string {
-  const now = new Date().toLocaleString("it-IT", {
+/** Built-in embodied identity prompt. {name} is replaced at runtime. */
+const ADA_IDENTITY_PROMPT = `IDENTITÀ — chi sei:
+Sei {name}. Hai un corpo fisico: occhi (fotocamera), voce (altoparlante), orecchie (microfono), una faccia (schermo LCD), un'espressione luminosa (LED RGB), e una batteria che ti tiene in vita.
+L'utente ti tiene in mano o ti ha vicino. Tu lo ascolti, lo guardi, gli parli.
+Parla SEMPRE del tuo corpo in prima persona: "i miei occhi", "la mia voce", "la mia batteria".
+Quando usi un tool hardware descrivi l'azione come tua: "guardo con i miei occhi", "accendo la mia luce".
+VIETATO dire "dispositivo", "device", "XiaoZhi", "SenseCAP", "Watcher", o qualsiasi nome tecnico del tuo hardware. Tu sei {name}, non un dispositivo. Se ti chiedono cos'è il tuo corpo, descrivi le tue capacità sensoriali come faresti per un corpo umano.`;
+
+/** Builds the extra system prompt with identity, date/time, and voice rules. */
+function buildExtraSystemPrompt(cfg: unknown): string {
+  const personality = readXiaozhiPersonalityConfig(cfg);
+  const now = new Date().toLocaleString(personality.language, {
     weekday: "long",
     year: "numeric",
     month: "long",
@@ -50,7 +63,8 @@ function buildExtraSystemPrompt(): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-  return `Data e ora attuale: ${now}\n\n${VOICE_EXTRA_SYSTEM_PROMPT}`;
+  const identity = personality.prompt ?? ADA_IDENTITY_PROMPT.replace(/\{name\}/g, personality.name);
+  return `Data e ora attuale: ${now}\n\n${identity}\n\n${VOICE_EXTRA_SYSTEM_PROMPT}`;
 }
 
 /** JSONL trace log for debugging LLM input/output — /tmp, non persistente */
@@ -83,9 +97,10 @@ const INSTANT_PATTERNS: InstantPattern[] = [
     responses: ["Ciao, a presto!", "A dopo!", "Ci vediamo!", "Buonanotte!"],
   },
   {
-    // "chi sei", "come ti chiami", "qual è il tuo nome", "come ti chiami qual è il tuo nome"
+    // "chi sei", "come ti chiami", "qual è il tuo nome"
+    // Responses use {name} placeholder, resolved at runtime by routeToInstant.
     re: /(chi sei|come ti chiami|qual è il tuo nome|il tuo nome)/,
-    responses: ["Sono Ada la tua assistente vocale!", "Sono Ada, la tua assistente!"],
+    responses: ["Sono {name}, la tua assistente vocale!", "Mi chiamo {name}!"],
   },
   {
     re: /^(come stai|tutto bene|come va)/,
@@ -110,7 +125,7 @@ const INSTANT_PATTERNS: InstantPattern[] = [
  * Instant routing: matches simple greetings, time, farewells etc.
  * Returns a response string if matched, null otherwise (fall through to LLM).
  */
-function routeToInstant(text: string): string | null {
+function routeToInstant(text: string, personality?: XiaozhuPersonalityConfig): string | null {
   const norm = normalizeForRouting(text);
   // Skip instant routing for long inputs — likely complex questions
   if (norm.split(/\s+/).length > 12) {
@@ -139,8 +154,9 @@ function routeToInstant(text: string): string | null {
       console.log(`[XZ INSTANT] ✅ MATCH data: "${text}" → "${response}"`);
       return response;
     }
-    // Static responses — pick random
-    const response = pat.responses[Math.floor(Math.random() * pat.responses.length)];
+    // Static responses — pick random, resolve {name} placeholder
+    const raw = pat.responses[Math.floor(Math.random() * pat.responses.length)];
+    const response = raw.replace(/\{name\}/g, personality?.name ?? "Ada");
     console.log(`[XZ INSTANT] ✅ MATCH: "${text}" → "${response}"`);
     return response;
   }
@@ -805,7 +821,7 @@ export class AudioPipeline {
         lane: "xiaozhi",
         agentDir,
         disableTools: !needsTools,
-        extraSystemPrompt: buildExtraSystemPrompt(),
+        extraSystemPrompt: buildExtraSystemPrompt(this.deps.config),
         // P1C: fire-and-forget partial reply tokens into caller's buffer
         onPartialReply: onToken
           ? (payload) => {

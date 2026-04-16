@@ -9,7 +9,7 @@ const ok = (payload: unknown) => ({
   details: payload,
 });
 
-const notConnected = () => ok({ ok: false, error: "No LaraGoci device connected" });
+const notConnected = () => ok({ ok: false, error: "No device connected" });
 
 /** Register all LaraGoci MCP tools on the plugin API. */
 export function registerLaragociTools(
@@ -22,8 +22,8 @@ export function registerLaragociTools(
   const getBridge = (): XiaozhiBridge | null => getActiveBridge();
   api.registerTool({
     name: "laragoci_status",
-    label: "LaraGoci Status",
-    description: "Get the current connection status of the LaraGoci device.",
+    label: "Ada Status",
+    description: "Controlla il mio stato di connessione e se sono online.",
     parameters: Type.Object({}),
     async execute(_id, _params) {
       const bridge = getBridge();
@@ -34,8 +34,8 @@ export function registerLaragociTools(
 
   api.registerTool({
     name: "laragoci_speak",
-    label: "LaraGoci Speak",
-    description: "Speak text aloud on the LaraGoci device speaker via TTS.",
+    label: "Ada Speak",
+    description: "Parlo ad alta voce tramite il mio altoparlante usando TTS.",
     parameters: Type.Object({
       text: Type.String({ description: "Text to speak on the device." }),
     }),
@@ -48,8 +48,8 @@ export function registerLaragociTools(
 
   api.registerTool({
     name: "laragoci_emoji",
-    label: "LaraGoci Emoji",
-    description: "Display an emotion on the LaraGoci LCD screen.",
+    label: "Ada Emoji",
+    description: "Mostro un'emozione sul mio schermo LCD (la mia faccia).",
     parameters: Type.Object({
       emotion: Type.String({
         description: "Emotion to display (e.g. happy, sad, thinking, neutral).",
@@ -65,8 +65,8 @@ export function registerLaragociTools(
 
   api.registerTool({
     name: "laragoci_volume",
-    label: "LaraGoci Volume",
-    description: "Set the speaker volume on the LaraGoci device (0–100).",
+    label: "Ada Volume",
+    description: "Regolo il volume del mio altoparlante (0-100).",
     parameters: Type.Object({
       level: Type.Number({ description: "Volume level 0–100.", minimum: 0, maximum: 100 }),
     }),
@@ -88,9 +88,8 @@ export function registerLaragociTools(
 
   api.registerTool({
     name: "laragoci_play",
-    label: "LaraGoci Play",
-    description:
-      "Play an audio URL on the LaraGoci device speaker. Use the repeat parameter to play multiple times.",
+    label: "Ada Play",
+    description: "Riproduco un audio URL dal mio altoparlante. Usa repeat per ripetere.",
     parameters: Type.Object({
       url: Type.String({ description: "Audio URL to play." }),
       repeat: Type.Optional(
@@ -122,9 +121,9 @@ export function registerLaragociTools(
 
   api.registerTool({
     name: "laragoci_led",
-    label: "LaraGoci LED",
+    label: "Ada LED",
     description:
-      "Control the LED on the LaraGoci device. Set color (hex), mode (static/pulse/blink), and optional duration.",
+      "Controllo il mio LED. Imposto colore (hex), modalità (static/pulse/blink) e durata.",
     parameters: Type.Object({
       hex_color: Type.String({
         description: "LED color as 6-char hex string, e.g. 'FF0000' for red, '00FF00' for green.",
@@ -165,9 +164,9 @@ export function registerLaragociTools(
 
   api.registerTool({
     name: "laragoci_haptic",
-    label: "LaraGoci Haptic",
+    label: "Ada Haptic",
     description:
-      "Trigger haptic/audio feedback on the LaraGoci device. Use the repeat parameter to fire multiple times (e.g. 'vibra 5 volte' → repeat=5).",
+      "Attivo il mio buzzer/vibrazione. Usa repeat per ripetere (es. 'vibra 5 volte' → repeat=5).",
     parameters: Type.Object({
       pattern: Type.String({
         description: "Feedback pattern: 'short', 'double', or 'long'.",
@@ -199,9 +198,8 @@ export function registerLaragociTools(
 
   api.registerTool({
     name: "laragoci_sensor",
-    label: "LaraGoci Sensor",
-    description:
-      "Read sensor data from the LaraGoci device (battery level, charging status, volume).",
+    label: "Ada Sensor",
+    description: "Leggo i miei sensori: livello batteria, stato ricarica, volume.",
     parameters: Type.Object({}),
     async execute(_id, _params) {
       const bridge = getBridge();
@@ -220,9 +218,9 @@ export function registerLaragociTools(
 
   api.registerTool({
     name: "laragoci_photo",
-    label: "LaraGoci Photo",
+    label: "Ada Photo",
     description:
-      "Take a photo with the LaraGoci device camera. Optionally provide a question for the vision model to answer about the image.",
+      "Scatto una foto con la MIA fotocamera e descrivo quello che vedo IO. Opzionalmente ricevo una domanda sull'immagine.",
     parameters: Type.Object({
       question: Type.Optional(
         Type.String({

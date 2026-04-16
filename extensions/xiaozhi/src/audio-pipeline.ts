@@ -11,6 +11,7 @@ import { appendFileSync } from "node:fs";
 import { OpusEncoder } from "@discordjs/opus";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
 import type { WebSocket } from "ws";
+import { getActiveBridge } from "./channel.js";
 import { readXiaozhiCompactionConfig } from "./config.js";
 import { maybeRotateSession } from "./context-manager.js";
 import { loadCoreAgentDeps } from "./core-bridge.js";
@@ -866,6 +867,12 @@ export class AudioPipeline {
         console.log(`[XZ UI] → ${msg}`);
       }
       this.ws.send(msg);
+      // Bug 3A: after SET_UI IDLE, re-apply active hardware effects.
+      // Pipeline sends directly on WS (not through bridge.sendToActiveSession),
+      // so we trigger the restore here.
+      if (msg.includes('"SET_UI"') && msg.includes('"state":100')) {
+        void getActiveBridge()?.restoreActiveHwEffects();
+      }
     }
   }
 }

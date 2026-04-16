@@ -140,7 +140,7 @@ export class XiaozhiBridge {
   }
 
   /** Re-send MCP commands for all active hardware effects after a state reset. */
-  private async restoreActiveHwEffects(): Promise<void> {
+  async restoreActiveHwEffects(): Promise<void> {
     const now = Date.now();
     for (const [key, effect] of this.activeHwEffects) {
       // Skip expired effects

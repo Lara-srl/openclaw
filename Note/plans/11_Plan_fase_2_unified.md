@@ -436,6 +436,11 @@ Guida architetturale: [`Note/plans/Guide/camera-vision-proxy.md`](Note/plans/Gui
 
 ---
 
+## Ada peronnalita
+
+plan per modifica personalita di Ada
+~/.claude/plans/melodic-sparking-sunrise.md
+
 ## Step 4 — 2.1B: Firmware UI State Machine (C++ LVGL)
 
 **Obiettivo**: il firmware riceve `SET_UI` e renderizza gli 8 stati di Ada sul display 412x412.

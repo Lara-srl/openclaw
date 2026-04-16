@@ -89,23 +89,32 @@ export function registerLaragociTools(
   api.registerTool({
     name: "laragoci_play",
     label: "LaraGoci Play",
-    description: "Play an audio URL on the LaraGoci device speaker.",
+    description:
+      "Play an audio URL on the LaraGoci device speaker. Use the repeat parameter to play multiple times.",
     parameters: Type.Object({
       url: Type.String({ description: "Audio URL to play." }),
+      repeat: Type.Optional(
+        Type.Number({
+          description: "How many times to play the sound (default 1, max 20).",
+          minimum: 1,
+          maximum: 20,
+        }),
+      ),
     }),
     async execute(_id, params) {
       const bridge = getBridge();
       if (!bridge) return notConnected();
-      // Deferred: queue for execution after voice turn completes
-      // Unique key so multiple play calls in one turn are not deduplicated
-      bridge.queueDeferredHwAction({
-        key: `play-${Date.now()}`,
-        mcpName: "self.audio_player.play",
-        args: { url: params.url },
-        durationMs: 0,
-        persist: false,
-      });
-      return ok({ ok: true, queued: true, url: params.url });
+      const count = Math.min(Math.max(Math.round(params.repeat ?? 1), 1), 20);
+      for (let i = 0; i < count; i++) {
+        bridge.queueDeferredHwAction({
+          key: `play-${Date.now()}-${i}`,
+          mcpName: "self.audio_player.play",
+          args: { url: params.url },
+          durationMs: 0,
+          persist: false,
+        });
+      }
+      return ok({ ok: true, queued: true, url: params.url, repeat: count });
     },
   });
 
@@ -157,25 +166,34 @@ export function registerLaragociTools(
   api.registerTool({
     name: "laragoci_haptic",
     label: "LaraGoci Haptic",
-    description: "Trigger haptic/audio feedback on the LaraGoci device.",
+    description:
+      "Trigger haptic/audio feedback on the LaraGoci device. Use the repeat parameter to fire multiple times (e.g. 'vibra 5 volte' → repeat=5).",
     parameters: Type.Object({
       pattern: Type.String({
         description: "Feedback pattern: 'short', 'double', or 'long'.",
       }),
+      repeat: Type.Optional(
+        Type.Number({
+          description: "How many times to repeat the feedback (default 1, max 20).",
+          minimum: 1,
+          maximum: 20,
+        }),
+      ),
     }),
     async execute(_id, params) {
       const bridge = getBridge();
       if (!bridge) return notConnected();
-      // Deferred: haptic fires after voice turn so user feels it at the right moment
-      // Unique key so multiple haptic calls in one turn are not deduplicated
-      bridge.queueDeferredHwAction({
-        key: `haptic-${Date.now()}`,
-        mcpName: "self.haptic.feedback",
-        args: { pattern: params.pattern },
-        durationMs: 0,
-        persist: false,
-      });
-      return ok({ ok: true, queued: true, pattern: params.pattern });
+      const count = Math.min(Math.max(Math.round(params.repeat ?? 1), 1), 20);
+      for (let i = 0; i < count; i++) {
+        bridge.queueDeferredHwAction({
+          key: `haptic-${Date.now()}-${i}`,
+          mcpName: "self.haptic.feedback",
+          args: { pattern: params.pattern },
+          durationMs: 0,
+          persist: false,
+        });
+      }
+      return ok({ ok: true, queued: true, pattern: params.pattern, repeat: count });
     },
   });
 

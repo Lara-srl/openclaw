@@ -144,8 +144,13 @@ export class XiaozhiBridge {
     if (actions.length === 0) return;
 
     console.log(`[XZ bridge] executing ${actions.length} deferred hw action(s)`);
-    for (const action of actions) {
+    for (let i = 0; i < actions.length; i++) {
+      const action = actions[i];
       try {
+        // Small delay between repeated fire-and-forget actions so device processes each one
+        if (i > 0 && !action.persist) {
+          await new Promise((r) => setTimeout(r, 400));
+        }
         await this.callDeviceMcp("tools/call", {
           name: action.mcpName,
           arguments: action.args,

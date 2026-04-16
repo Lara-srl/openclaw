@@ -343,6 +343,8 @@ export class AudioPipeline {
     this.state = "idle";
     this.sendJson(buildUiState(AdaUiState.IDLE));
     this.opusFrames = [];
+    // Bug 3A: flush any deferred hardware actions even on abort
+    void getActiveBridge()?.executeDeferredHwActions();
   }
 
   /**
@@ -546,7 +548,10 @@ export class AudioPipeline {
       this.sendJson(buildTts("stop"));
       this.sendJson(buildUiState(AdaUiState.IDLE));
       this.state = "idle";
-      // device will automatically send listen:start (dialog mode)
+
+      // Bug 3A: execute deferred hardware actions (LED, haptic, etc.) AFTER
+      // voice turn is complete so firmware SET_UI IDLE doesn't reset timers.
+      void getActiveBridge()?.executeDeferredHwActions();
 
       // Plan 12 — Trigger B: fire pending compaction AFTER full voice response
       // has been streamed to the device. Fire-and-forget; consume closure.
@@ -567,6 +572,8 @@ export class AudioPipeline {
     this.sendJson(buildTts("stop"));
     this.sendJson(buildUiState(AdaUiState.IDLE));
     this.state = "idle";
+    // Bug 3A: flush any deferred hardware actions queued during this turn
+    void getActiveBridge()?.executeDeferredHwActions();
   }
 
   /**
@@ -867,12 +874,6 @@ export class AudioPipeline {
         console.log(`[XZ UI] → ${msg}`);
       }
       this.ws.send(msg);
-      // Bug 3A: after SET_UI IDLE, re-apply active hardware effects.
-      // Pipeline sends directly on WS (not through bridge.sendToActiveSession),
-      // so we trigger the restore here.
-      if (msg.includes('"SET_UI"') && msg.includes('"state":100')) {
-        void getActiveBridge()?.restoreActiveHwEffects();
-      }
     }
   }
 }

@@ -64,3 +64,11 @@ export type ActiveHwEffect = {
   expiresAt: number;
   expiryTimer: ReturnType<typeof setTimeout> | null;
 };
+
+/** Bug 3A deferred: hardware action queued during LLM turn, executed post-IDLE. */
+export type DeferredHwAction = {
+  key: string;
+  mcpName: string;
+  args: Record<string, unknown>;
+  durationMs: number;
+};

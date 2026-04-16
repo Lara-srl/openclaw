@@ -76,6 +76,8 @@ export type CoreAgentDeps = {
     workspaceDir: string;
     config?: CoreConfig;
     prompt: string;
+    /** Images to pass to vision-capable models. */
+    images?: Array<{ type: "image"; data: string; mimeType: string }>;
     provider?: string;
     model?: string;
     thinkLevel?: string;

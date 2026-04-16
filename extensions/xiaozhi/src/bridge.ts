@@ -14,6 +14,7 @@ import { buildHello, buildMcpRequest, parseMessage } from "./protocol.js";
 import type {
   ActiveHwEffect,
   BridgeDeps,
+  DeferredHwAction,
   DeviceSession,
   McpJsonRpcResponse,
   McpPendingCall,
@@ -32,6 +33,8 @@ export class XiaozhiBridge {
   private pendingMcpCalls = new Map<number, McpPendingCall>();
   /** Bug 3A: active hardware effects re-applied after SET_UI IDLE. */
   private activeHwEffects = new Map<string, ActiveHwEffect>();
+  /** Bug 3A deferred: hardware actions queued during LLM turn, executed post-IDLE. */
+  private deferredHwActions: DeferredHwAction[] = [];
 
   constructor(private deps: BridgeDeps) {
     this.wss = new WebSocketServer({ noServer: true });
@@ -81,24 +84,11 @@ export class XiaozhiBridge {
     this.nightlyScheduled = true;
   }
 
-  /** Send a JSON string to the first active (OPEN) device session.
-   * Bug 3A: after SET_UI IDLE, re-applies active hardware effects so
-   * the firmware state reset doesn't kill LED/haptic timers. */
+  /** Send a JSON string to the first active (OPEN) device session. */
   sendToActiveSession(json: string): boolean {
     const ws = this.getActiveWs();
     if (!ws) return false;
     ws.send(json);
-    // After IDLE, restore hardware effects that should still be active
-    if (this.activeHwEffects.size > 0) {
-      try {
-        const parsed = JSON.parse(json) as { type?: string; state?: number };
-        if (parsed.type === "SET_UI" && parsed.state === 100) {
-          void this.restoreActiveHwEffects();
-        }
-      } catch {
-        // not JSON or malformed — ignore
-      }
-    }
     return true;
   }
 
@@ -113,7 +103,7 @@ export class XiaozhiBridge {
     durationMs: number,
   ): void {
     const prev = this.activeHwEffects.get(key);
-    if (prev) clearTimeout(prev.expiryTimer);
+    if (prev?.expiryTimer) clearTimeout(prev.expiryTimer);
 
     const expiresAt = durationMs > 0 ? Date.now() + durationMs : 0;
     const expiryTimer =
@@ -136,6 +126,38 @@ export class XiaozhiBridge {
     if (effect) {
       if (effect.expiryTimer) clearTimeout(effect.expiryTimer);
       this.activeHwEffects.delete(key);
+    }
+  }
+
+  /** Queue a hardware action for execution after the voice turn completes (post-IDLE). */
+  queueDeferredHwAction(action: DeferredHwAction): void {
+    // Replace any existing action with the same key (e.g. multiple LED calls in one turn)
+    this.deferredHwActions = this.deferredHwActions.filter((a) => a.key !== action.key);
+    this.deferredHwActions.push(action);
+    console.log(`[XZ bridge] deferred hw action queued: ${action.key} (${action.mcpName})`);
+  }
+
+  /** Execute all deferred hardware actions (called after voice turn IDLE). */
+  async executeDeferredHwActions(): Promise<void> {
+    const actions = this.deferredHwActions;
+    this.deferredHwActions = [];
+    if (actions.length === 0) return;
+
+    console.log(`[XZ bridge] executing ${actions.length} deferred hw action(s)`);
+    for (const action of actions) {
+      try {
+        await this.callDeviceMcp("tools/call", {
+          name: action.mcpName,
+          arguments: action.args,
+        });
+        // Register as active effect so it survives future SET_UI IDLE resets
+        if (action.durationMs >= 0) {
+          this.registerHwEffect(action.key, action.mcpName, action.args, action.durationMs);
+        }
+        console.log(`[XZ bridge] deferred hw action executed: ${action.key}`);
+      } catch (err) {
+        console.log(`[XZ bridge] deferred hw action failed: ${action.key}: ${err}`);
+      }
     }
   }
 

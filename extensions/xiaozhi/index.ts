@@ -5,6 +5,7 @@ import { parseXiaozhuConfig, type XiaozhuConfig } from "./src/config.js";
 import { handleOtaRequest } from "./src/ota.js";
 import { registerLaragociTools } from "./src/tools.js";
 import type { XiaozhuRuntime } from "./src/types.js";
+import { createVisionHandler } from "./src/vision-proxy.js";
 
 const xiaozhiConfigSchema = {
   parse(value: unknown): XiaozhuConfig {
@@ -64,6 +65,12 @@ const xiaozhiPlugin = {
       handler(req, res) {
         handleOtaRequest(req, res, config);
       },
+    });
+
+    // Vision proxy — firmware POSTs camera captures here for Pixtral analysis
+    api.registerHttpRoute({
+      path: "/xiaozhi/vision",
+      handler: createVisionHandler(),
     });
 
     // Gateway method stub

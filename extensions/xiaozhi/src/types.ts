@@ -71,4 +71,6 @@ export type DeferredHwAction = {
   mcpName: string;
   args: Record<string, unknown>;
   durationMs: number;
+  /** If true, register as persistent hw effect (survives SET_UI resets). LED=true, haptic/play=false. */
+  persist: boolean;
 };

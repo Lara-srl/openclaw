@@ -98,6 +98,8 @@ export const XiaozhuConfigSchema = z
     otaPath: z.string().default("/xiaozhi/ota/"),
     /** Plan 12 — proactive compaction (nightly + post-response safety net). */
     compaction: XiaozhuCompactionSchema,
+    /** Override URL for the vision proxy endpoint (default: http://localhost:18789/xiaozhi/vision). */
+    visionUrl: z.string().optional(),
   })
   .strict();
 
@@ -121,6 +123,27 @@ export function parseXiaozhuConfig(value: unknown): XiaozhuConfig {
  * Never throws — returns XIAOZHI_COMPACTION_DEFAULTS on any parse/shape error.
  * Used from audio-pipeline (Trigger B) and bridge (Trigger A).
  */
+/** Read the vision proxy URL from xiaozhi plugin config. Falls back to default. */
+export function readXiaozhiVisionUrl(
+  cfg: unknown,
+  fallback = "https://laragoci.lara-ai.eu/xiaozhi/vision",
+): string {
+  try {
+    const plugins = (cfg as Record<string, unknown> | undefined)?.plugins as
+      | Record<string, unknown>
+      | undefined;
+    const entries = plugins?.entries as Record<string, unknown> | undefined;
+    const xiaozhiEntry = entries?.xiaozhi as Record<string, unknown> | undefined;
+    const nestedConfig = xiaozhiEntry?.config as Record<string, unknown> | undefined;
+    const candidate =
+      nestedConfig ?? xiaozhiEntry ?? (plugins?.xiaozhi as Record<string, unknown> | undefined);
+    const parsed = parseXiaozhuConfig(candidate);
+    return parsed.visionUrl ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export function readXiaozhiCompactionConfig(cfg: unknown): XiaozhuCompactionConfig {
   try {
     const plugins = (cfg as Record<string, unknown> | undefined)?.plugins as

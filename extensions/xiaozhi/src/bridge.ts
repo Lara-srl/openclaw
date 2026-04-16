@@ -3,7 +3,7 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import { AudioPipeline } from "./audio-pipeline.js";
-import { readXiaozhiCompactionConfig } from "./config.js";
+import { readXiaozhiCompactionConfig, readXiaozhiVisionUrl } from "./config.js";
 import {
   resolveMainSessionContext,
   scheduleNightlyCompaction,
@@ -150,8 +150,8 @@ export class XiaozhiBridge {
           name: action.mcpName,
           arguments: action.args,
         });
-        // Register as active effect so it survives future SET_UI IDLE resets
-        if (action.durationMs >= 0) {
+        // Only persistent effects (LED) survive SET_UI resets; fire-and-forget (haptic/play) don't
+        if (action.persist && action.durationMs >= 0) {
           this.registerHwEffect(action.key, action.mcpName, action.args, action.durationMs);
         }
         console.log(`[XZ bridge] deferred hw action executed: ${action.key}`);
@@ -292,6 +292,21 @@ export class XiaozhiBridge {
 
     // Handshake: send hello frame
     ws.send(buildHello(sessionId));
+
+    // Send MCP initialize with vision capabilities so firmware knows where to POST photos
+    const visionUrl = readXiaozhiVisionUrl(this.deps.config);
+    const initId = ++this.mcpRequestId;
+    ws.send(
+      buildMcpRequest(sessionId, initId, "initialize", {
+        capabilities: {
+          vision: {
+            url: visionUrl,
+            token: "",
+          },
+        },
+      }),
+    );
+    console.log(`[XZ bridge] MCP request id=${initId} method=initialize vision_url=${visionUrl}`);
 
     // B9: inject pending TTS from previous B8 session before new listen cycle
     const pending = deviceId ? this.pendingTts.get(deviceId) : undefined;

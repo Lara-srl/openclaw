@@ -11,7 +11,13 @@ import {
 } from "./context-manager.js";
 import { loadCoreAgentDeps, type CoreConfig } from "./core-bridge.js";
 import { buildHello, buildMcpRequest, parseMessage } from "./protocol.js";
-import type { BridgeDeps, DeviceSession, McpJsonRpcResponse, McpPendingCall } from "./types.js";
+import type {
+  ActiveHwEffect,
+  BridgeDeps,
+  DeviceSession,
+  McpJsonRpcResponse,
+  McpPendingCall,
+} from "./types.js";
 
 export class XiaozhiBridge {
   private sessions = new Map<string, DeviceSession>();
@@ -24,6 +30,8 @@ export class XiaozhiBridge {
   private mcpRequestId = 0;
   /** Pending MCP calls awaiting device response, keyed by JSON-RPC id. */
   private pendingMcpCalls = new Map<number, McpPendingCall>();
+  /** Bug 3A: active hardware effects re-applied after SET_UI IDLE. */
+  private activeHwEffects = new Map<string, ActiveHwEffect>();
 
   constructor(private deps: BridgeDeps) {
     this.wss = new WebSocketServer({ noServer: true });
@@ -73,12 +81,85 @@ export class XiaozhiBridge {
     this.nightlyScheduled = true;
   }
 
-  /** Send a JSON string to the first active (OPEN) device session. */
+  /** Send a JSON string to the first active (OPEN) device session.
+   * Bug 3A: after SET_UI IDLE, re-applies active hardware effects so
+   * the firmware state reset doesn't kill LED/haptic timers. */
   sendToActiveSession(json: string): boolean {
     const ws = this.getActiveWs();
     if (!ws) return false;
     ws.send(json);
+    // After IDLE, restore hardware effects that should still be active
+    if (this.activeHwEffects.size > 0) {
+      try {
+        const parsed = JSON.parse(json) as { type?: string; state?: number };
+        if (parsed.type === "SET_UI" && parsed.state === 100) {
+          void this.restoreActiveHwEffects();
+        }
+      } catch {
+        // not JSON or malformed — ignore
+      }
+    }
     return true;
+  }
+
+  /**
+   * Register a hardware effect that should persist across SET_UI state changes.
+   * Called by tool handlers after a successful MCP call with a duration.
+   */
+  registerHwEffect(
+    key: string,
+    mcpName: string,
+    args: Record<string, unknown>,
+    durationMs: number,
+  ): void {
+    const prev = this.activeHwEffects.get(key);
+    if (prev) clearTimeout(prev.expiryTimer);
+
+    const expiresAt = durationMs > 0 ? Date.now() + durationMs : 0;
+    const expiryTimer =
+      durationMs > 0
+        ? setTimeout(() => {
+            this.activeHwEffects.delete(key);
+            console.log(`[XZ bridge] hw effect expired: ${key}`);
+          }, durationMs)
+        : null;
+
+    this.activeHwEffects.set(key, { mcpName, args, expiresAt, expiryTimer });
+    console.log(
+      `[XZ bridge] hw effect registered: ${key} (${durationMs > 0 ? `${durationMs}ms` : "permanent"})`,
+    );
+  }
+
+  /** Remove a hardware effect (e.g. when explicitly turned off). */
+  clearHwEffect(key: string): void {
+    const effect = this.activeHwEffects.get(key);
+    if (effect) {
+      if (effect.expiryTimer) clearTimeout(effect.expiryTimer);
+      this.activeHwEffects.delete(key);
+    }
+  }
+
+  /** Re-send MCP commands for all active hardware effects after a state reset. */
+  private async restoreActiveHwEffects(): Promise<void> {
+    const now = Date.now();
+    for (const [key, effect] of this.activeHwEffects) {
+      // Skip expired effects
+      if (effect.expiresAt > 0 && now >= effect.expiresAt) {
+        this.activeHwEffects.delete(key);
+        continue;
+      }
+      // Adjust remaining duration
+      const args = { ...effect.args };
+      if (effect.expiresAt > 0 && typeof args.duration_ms === "number") {
+        args.duration_ms = Math.max(0, effect.expiresAt - now);
+      }
+      try {
+        await this.callDeviceMcp("tools/call", { name: effect.mcpName, arguments: args });
+        console.log(`[XZ bridge] hw effect restored: ${key}`);
+      } catch (err) {
+        console.log(`[XZ bridge] hw effect restore failed: ${key}: ${err}`);
+      }
+    }
   }
 
   /**

@@ -130,15 +130,17 @@ export function registerLaragociTools(
       if (!bridge) return notConnected();
       try {
         bridge.sendToActiveSession(buildUiState(AdaUiState.ACTING, { text: "LED..." }));
+        const mcpArgs = {
+          hex_color: params.hex_color,
+          mode: params.mode ?? "static",
+          duration_ms: params.duration_ms ?? 0,
+        };
         const result = await bridge.callDeviceMcp("tools/call", {
           name: "self.led.set",
-          arguments: {
-            hex_color: params.hex_color,
-            mode: params.mode ?? "static",
-            duration_ms: params.duration_ms ?? 0,
-          },
+          arguments: mcpArgs,
         });
-        // No IDLE here — pipeline sends IDLE at end of turn; LED timer persists firmware-side.
+        // Bug 3A: register effect so bridge re-applies it after SET_UI IDLE.
+        bridge.registerHwEffect("led", "self.led.set", mcpArgs, mcpArgs.duration_ms);
         return ok({ ok: true, color: params.hex_color, mode: params.mode ?? "static", result });
       } catch (err) {
         return ok({ ok: false, error: String(err) });
@@ -208,11 +210,12 @@ export function registerLaragociTools(
       if (!bridge) return notConnected();
       try {
         bridge.sendToActiveSession(buildUiState(AdaUiState.ACTING, { text: "Foto..." }));
+        const photoQuestion = params.question ?? "Describe what you see.";
         const result = await bridge.callDeviceMcp(
           "tools/call",
           {
             name: "self.camera.take_photo",
-            arguments: {},
+            arguments: { question: photoQuestion },
           },
           10_000, // Camera capture needs longer timeout
         );

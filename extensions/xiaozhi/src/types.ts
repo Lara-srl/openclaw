@@ -55,3 +55,12 @@ export type McpPendingCall = {
   reject: (reason: unknown) => void;
   timer: ReturnType<typeof setTimeout>;
 };
+
+/** Bug 3A: tracked hardware effect that persists across SET_UI state changes. */
+export type ActiveHwEffect = {
+  mcpName: string;
+  args: Record<string, unknown>;
+  /** 0 = permanent (no auto-expiry). */
+  expiresAt: number;
+  expiryTimer: ReturnType<typeof setTimeout> | null;
+};

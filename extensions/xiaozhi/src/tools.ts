@@ -89,9 +89,12 @@ export function registerLaragociTools(
   api.registerTool({
     name: "laragoci_play",
     label: "Ada Play",
-    description: "Riproduco un audio URL dal mio altoparlante. Usa repeat per ripetere.",
+    description:
+      "Riproduco un suono dal mio altoparlante. Suoni disponibili: success, vibration, exclamation, popup, welcome. Usa repeat per ripetere.",
     parameters: Type.Object({
-      url: Type.String({ description: "Audio URL to play." }),
+      url: Type.String({
+        description: "Sound name: success, vibration, exclamation, popup, welcome.",
+      }),
       repeat: Type.Optional(
         Type.Number({
           description: "How many times to play the sound (default 1, max 20).",

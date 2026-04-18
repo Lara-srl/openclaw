@@ -596,6 +596,16 @@ Dopo l'integrazione degli occhi Ada (4A), 5 bug firmware + 2 bug bridge risolti 
 
 **Decisione**: la preview foto richiede un screen LVGL dedicato con decodifica JPEG. Meglio progettarlo in LVGL Pro insieme agli altri stati (LISTENING, THINKING, SPEAKING) piuttosto che hackerarlo nello screen idle attuale. Da fare dopo Step 4C (completamento stati visivi).
 
+#### Commit riassunto sessione 4B
+
+| Commit                                                                 | Descrizione                                                                 |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| [`f746fa4842`](https://github.com/openclaw/openclaw/commit/f746fa4842) | fix(xiaozhi): voice fallback when STT returns silence instead of silent ack |
+| [`faf4e623e4`](https://github.com/openclaw/openclaw/commit/faf4e623e4) | fix(xiaozhi): update play tool description to use local sound names         |
+| [`8dbcccd53d`](https://github.com/openclaw/openclaw/commit/8dbcccd53d) | docs(notes): add Step 4B bug fixes to Plan 11 — 7 bugs resolved             |
+
+Bug firmware (4B-1 → 4B-5) applicati direttamente sulla VM firmware, non tracciati in git repo OpenClaw.
+
 ---
 
 ## Step 4 Bug : /home/openclaw/.claude/plans/rustling-launching-wilkes.md

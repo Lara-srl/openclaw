@@ -443,7 +443,19 @@ plan per modifica personalita di Ada
 
 ## Step 4 — 2.1B: Firmware UI State Machine (C++ LVGL)
 
+planmode : /home/openclaw/.claude/plans/replicated-sniffing-octopus.md
+
 **Obiettivo**: il firmware riceve `SET_UI` e renderizza gli 8 stati di Ada sul display 412x412.
+
+### Tool di design
+
+**Scelto: LVGL Pro** (https://lvgl.io/pro) — editor visuale con live preview, timeline animations, export C code diretto. Desktop app o browser, zero setup. Free trial 30gg, free per repo pubblici.
+
+- Workflow: design stati 412x412 nell'editor → preview animazioni live → export C → port nel firmware → test su device
+
+**Alternativa: LVGL MCP Simulator** (https://github.com/jaklys/Lvgl-mcp-esp32) — simulatore headless Windows, utile per far generare codice LVGL a Claude (screenshot PNG + widget tree JSON). Complementare all'editor per iterazioni rapide via AI.
+
+**Compatibilità versioni**: firmware XiaoZhi usa LVGL **9.4.0** (`~9.4.0` in `idf_component.yml`), MCP simulator usa v9.2 — entrambi v9.x, API compatibile.
 
 ### Architettura firmware
 
@@ -495,7 +507,98 @@ plan per modifica personalita di Ada
 
 **Complessità: L**
 
+### Progresso Step 4 — 2026-04-18
+
+#### 4A: Stato IDLE (Astro Bot eyes) — LVGL Pro + firmware integration
+
+**Design LVGL Pro completato** — progetto `Note/ada_ui/`:
+
+- `globals.xml`: palette ridotta (`bg_dark` #000000, `ada_blue` #00AAFF) + costanti dimensioni occhio (`ada_ew=70`, `ada_eh=100`, `ada_er=35`, `ada_gap=60`). Prefisso `ada_` obbligatorio per evitare clash con include guard generati.
+- `components/eye/eye.xml`: singolo `lv_obj` pill-shaped via `<style>` (NON attributi diretti su `<view>` — LVGL Pro non li accetta).
+- `screens/screen_idle/screen_idle.xml`: sfondo nero 412x412, 2 eye centrati (x=106/236, y=156), timeline blink (height 100→6→100, 200ms).
+- Screen `<view>` senza `extends="lv_obj"` — lo screen IS lo screen object.
+
+**Codice C generato** da LVGL Pro export: `ada_ui*.c/h`, `eye_gen.c/h`, `screen_idle_gen.c/h`.
+
+**Wrapper C++** manuale:
+
+- `ada_ui_manager.h/cc` — singleton, chiama `ada_ui_init(NULL)` + `screen_idle_create()` + `lv_screen_load()`. Blink repeat via `esp_timer` ogni 3.5s che retrigga `screen_idle_get_timeline(BLINK)`.
+
+**Integrazione firmware**: 3 patch (CMakeLists, sensecap_watcher.cc, application.cc SET_UI dispatch).
+
+**Guida workflow**: `Note/plans/Guide/lvgl_pro_workflow.md`
+
+**✅ COMPLETATO — 2026-04-18** — Occhi Astro Bot visibili sul display SenseCAP Watcher.
+
+**Fix applicati durante l'integrazione**:
+
+- `CONFIG_LV_USE_OBJ_NAME=y` abilitato in `sdkconfig` (era commentato, serviva per `lv_obj_set_name`/`lv_obj_find_by_name` del codice LVGL Pro generato)
+- `AdaUiManager::Initialize()` va chiamato in `CustomLcdDisplay::SetupUI()` (non nel costruttore `SensecapWatcher`) — altrimenti `Application::Initialize()` sovrascrive lo screen con la UI chat standard
+- Header/cc del manager aggiornati: usa codice LVGL Pro generato (`ada_ui_init()` + `screen_idle_create()` + `lv_screen_load()`) invece di creare LVGL objects manualmente
+
+**Lezioni apprese LVGL Pro XML**:
+
+1. `<view ... />` self-closing non valido → usare `<view>...</view>`
+2. `bg_color`, `radius`, `bg_opa`, `border_width` NON sono attributi di `<view>` → vanno in `<style>`
+3. Nomi costanti globali diventano `#define UPPER_CASE` → conflitto con include guard se nome = componente (es. `eye_h` → `EYE_H` = guard di `eye_gen.h`)
+4. Screen `<view>` senza `extends` — NON è un `lv_obj`, è lo screen root
+
 ---
+
+### 4B: Bug fix post-integrazione — 2026-04-18
+
+Dopo l'integrazione degli occhi Ada (4A), 5 bug firmware + 2 bug bridge risolti in sessione.
+
+#### Bug 4B-1: Handler SET_UI mancante (firmware)
+
+**Problema**: `W Application: Unknown message type: SET_UI` — il firmware non gestiva il messaggio SET_UI dal bridge.
+**Fix**: Aggiunto handler in `application.cc` → `OnIncomingJson()`, dispatch a `AdaUiManager::GetInstance().SetState()`.
+**✅ FATTO** — verificato nel serial log: `AdaUI: State: 100 -> 200`
+
+#### Bug 4B-2: Handler ping mancante (firmware)
+
+**Problema**: `W Application: Unknown message type: ping` — keepalive dal bridge non gestito.
+**Fix**: Aggiunto handler silenzioso in `application.cc` → `OnIncomingJson()`.
+**✅ FATTO** — nessun warning nel log.
+
+#### Bug 4B-3: AFE ringbuffer overflow (firmware)
+
+**Problema**: `W AFE: Ringbuffer of AFE(FEED) is full` — backpressure dalla send queue (WiFi lento) bloccava il fetch dall'AFE.
+**Root cause**: `PushTaskToEncodeQueue()` in `audio_service.cc` usava `wait()` bloccante → se la send queue era piena (WebSocket lento), il fetch dall'AFE si fermava → ringbuffer overflow → device si bloccava.
+**Fix**: In `PushTaskToEncodeQueue()`, per `kAudioTaskTypeEncodeToSendQueue` → drop frame invece di bloccare. Il testing mode mantiene il wait bloccante.
+**✅ FATTO** — testato con WiFi debole, nessun overflow.
+
+#### Bug 4B-4: Tool `self.audio_player.play` non registrato (firmware)
+
+**Problema**: `E MCP: tools/call: Unknown tool: self.audio_player.play` — il tool play non era registrato nel firmware.
+**Fix**: Aggiunto Tool 4 in `sensecap_watcher.cc` → `InitializeTools()`. Mapping 5 suoni locali: success, vibration, exclamation, popup, welcome.
+**✅ FATTO** — `sensecap_watcher: Playing sound: success`
+
+#### Bug 4B-5: Blink timer non si ferma durante stati non-IDLE (firmware)
+
+**Problema**: Gli occhi continuavano a lampeggiare durante LISTENING/THINKING/SPEAKING.
+**Fix**: `SetState()` in `ada_ui_manager.cc` ora ferma il blink timer quando esce da IDLE e lo riavvia quando torna a IDLE. Blink ridotto da 3.5s a 2s.
+**✅ FATTO** — occhi fissi aperti durante listening/speaking.
+
+#### Bug 4B-6: STT silenzio al primo push-to-talk (bridge)
+
+**Problema**: Il primo push-to-talk dopo connessione WS catturava solo silenzio (mic warmup). Il bridge mandava tts:start+stop vuoto → nessun feedback all'utente.
+**Fix**: Quando STT ritorna null, il bridge inietta "Scusami non ho sentito, puoi ripetere?" come fallback vocale invece del silent ack.
+**✅ FATTO** — commit [`f746fa4842`](https://github.com/openclaw/openclaw/commit/f746fa4842)
+
+#### Bug 4B-7: LLM mandava URL invece di nomi suoni locali (bridge)
+
+**Problema**: La description del tool `laragoci_play` diceva "Audio URL" → l'LLM mandava URL internet (es. mixkit.co/...) invece dei nomi locali.
+**Fix**: Aggiornata description e parametro url → "Sound name: success, vibration, exclamation, popup, welcome."
+**✅ FATTO** — commit [`faf4e623e4`](https://github.com/openclaw/openclaw/commit/faf4e623e4)
+
+#### Preview foto su screen Ada — RIMANDATO
+
+**Decisione**: la preview foto richiede un screen LVGL dedicato con decodifica JPEG. Meglio progettarlo in LVGL Pro insieme agli altri stati (LISTENING, THINKING, SPEAKING) piuttosto che hackerarlo nello screen idle attuale. Da fare dopo Step 4C (completamento stati visivi).
+
+---
+
+## Step 4 Bug : /home/openclaw/.claude/plans/rustling-launching-wilkes.md
 
 ## Step 5 — 2.1C: Asset Creation & Deploy
 

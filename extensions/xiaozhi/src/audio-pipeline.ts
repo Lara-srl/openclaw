@@ -460,8 +460,9 @@ export class AudioPipeline {
       if (gen !== this.generation) return;
 
       if (!text?.trim()) {
-        this.silentAck();
-        return;
+        // Instead of silent ack, give voice feedback so user knows to retry
+        text = "Scusami non ho sentito, puoi ripetere?";
+        console.log(`[XZ 2.3] STT null — injecting fallback: "${text}"`);
       }
 
       // Show transcription on device screen

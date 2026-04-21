@@ -1,0 +1,19 @@
+<component>
+	<api />
+
+	<styles>
+		<style
+			name="ear_ridge_s"
+			width="25"
+			height="80"
+			radius="9999"
+			bg_color="#ada_blue"
+			bg_opa="255"
+			border_width="0"
+		/>
+	</styles>
+
+	<view extends="lv_obj">
+		<style name="ear_ridge_s" />
+	</view>
+</component>

@@ -1,0 +1,11 @@
+<component>
+	<api />
+
+	<styles>
+		<style name="status_style" width="300" bg_opa="0" border_width="0" text_color="0x888888" text_align="center" />
+	</styles>
+
+	<view extends="lv_label">
+		<style name="status_style" />
+	</view>
+</component>

@@ -547,6 +547,7 @@ planmode : /home/openclaw/.claude/plans/replicated-sniffing-octopus.md
 
 ### 4B: Bug fix post-integrazione — 2026-04-18
 
+paln : /home/openclaw/.claude/plans/rustling-launching-wilkes.md
 Dopo l'integrazione degli occhi Ada (4A), 5 bug firmware + 2 bug bridge risolti in sessione.
 
 #### Bug 4B-1: Handler SET_UI mancante (firmware)
@@ -608,7 +609,71 @@ Bug firmware (4B-1 → 4B-5) applicati direttamente sulla VM firmware, non tracc
 
 ---
 
-## Step 4 Bug : /home/openclaw/.claude/plans/rustling-launching-wilkes.md
+### 4C: Boot/WiFi UX states — 2026-04-19
+
+plan: /home/openclaw/.claude/plans/plan-boot-wifi-ux.md
+
+**Obiettivo**: feedback visivo durante il boot. Prima di 4C il display saltava direttamente agli occhi (IDLE) senza mostrare stati intermedi.
+
+**Design LVGL Pro** — 2 nuovi componenti + 1 nuovo screen:
+
+- `components/boot_title/boot_title.xml` — `extends="lv_label"`, style: `bg_opa="0"`, `border_width="0"`, `text_color="#ada_blue"`, `width="412"`, `text_align="center"`
+- `components/boot_status/boot_status.xml` — `extends="lv_label"`, style: `bg_opa="0"`, `border_width="0"`, `text_color="0x888888"`, `width="300"`, `text_align="center"`
+- `screens/screen_boot/screen_boot.xml` — sfondo nero 412x412, `boot_title` (y=176) + `boot_status` (x=56, y=226)
+
+**Lezione LVGL Pro**: `<label>` non è tag valido in `<view>` → servono **componenti** con `extends="lv_label"`. Aggiungere `bg_opa="0"` + `border_width="0"` per rimuovere il rettangolo background di default.
+
+**Nuovi stati enum**:
+
+```cpp
+kAdaUiBoot           = 0     // "Ada" centrato (Montserrat 48, ADA_BLUE)
+kAdaUiWifiConnecting = 10    // + "WiFi..."
+kAdaUiWifiConfig     = 20    // + "Configura WiFi\nHotspot: ...\nIP: ..."
+kAdaUiActivating     = 50    // + "Attivazione..."
+```
+
+**Modifiche firmware**:
+
+| File                | Modifica                                                                                                                                                                                                         |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ada_ui_gen.h`      | Include `boot_title_gen.h`, `boot_status_gen.h`, `screen_boot_gen.h`                                                                                                                                             |
+| `ada_ui_manager.h`  | Nuovi stati enum + `boot_screen_` membro + `SetBootStatus()`                                                                                                                                                     |
+| `ada_ui_manager.cc` | `Initialize()`: boot*screen* prima, idle*screen* dopo. `SetState()`: transizioni boot→idle. Font Montserrat 48 per titolo                                                                                        |
+| `application.cc`    | `HandleStateChangedEvent()`: kDeviceStateIdle→kAdaUiIdle, kDeviceStateWifiConfiguring→kAdaUiWifiConfig. Network callback: Scanning/Connecting→kAdaUiWifiConnecting. HandleNetworkConnectedEvent→kAdaUiActivating |
+| `wifi_board.cc`     | `StartWifiConfigMode()`: `SetBootStatus()` con SSID+IP                                                                                                                                                           |
+
+**Config ESP-IDF**: `lv_font_montserrat_48` abilitata via menuconfig (Component config → LVGL → Font).
+
+**Flusso boot verificato**:
+
+```
+Power on → "Ada" → "WiFi..." → "Attivazione..." → occhi con blink
+WiFi non configurato → "Ada" → "Configura WiFi\nHotspot: Xiaozhi-XXXX\nIP: ..."
+```
+
+**✅ COMPLETATO — 2026-04-19** — Boot UX funzionante su SenseCAP Watcher.
+
+---
+
+### Progresso stati UI Ada — riepilogo
+
+| Codice | Stato           | Screen LVGL   | Status |
+| ------ | --------------- | ------------- | ------ |
+| 0      | BOOT            | `screen_boot` | ✅ 4C  |
+| 10     | WIFI_CONNECTING | `screen_boot` | ✅ 4C  |
+| 20     | WIFI_CONFIG     | `screen_boot` | ✅ 4C  |
+| 50     | ACTIVATING      | `screen_boot` | ✅ 4C  |
+| 100    | IDLE            | `screen_idle` | ✅ 4A  |
+| 200    | LISTENING       | TODO          | ❌     |
+| 300    | THINKING        | TODO          | ❌     |
+| 400    | ACTING          | TODO          | ❌     |
+| 500    | SPEAKING        | TODO          | ❌     |
+| 600    | COMPACTION      | TODO          | ❌     |
+| 900    | SHUTDOWN        | TODO          | ❌     |
+
+**Prossimo**: Step 4D — stati LISTENING/THINKING/SPEAKING (rendering procedurale sullo `screen_idle` esistente o nuovi screen LVGL Pro).
+
+---
 
 ## Step 5 — 2.1C: Asset Creation & Deploy
 

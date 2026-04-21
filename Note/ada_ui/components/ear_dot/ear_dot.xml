@@ -1,0 +1,19 @@
+<component>
+	<api />
+
+	<styles>
+		<style
+			name="ear_dot_s"
+			width="14"
+			height="14"
+			radius="9999"
+			bg_color="#ada_blue"
+			bg_opa="255"
+			border_width="0"
+		/>
+	</styles>
+
+	<view extends="lv_obj">
+		<style name="ear_dot_s" />
+	</view>
+</component>

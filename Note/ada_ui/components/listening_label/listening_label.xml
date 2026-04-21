@@ -1,0 +1,18 @@
+<component>
+	<api />
+
+	<styles>
+		<style
+			name="listening_style"
+			width="412"
+			bg_opa="0"
+			border_width="0"
+			text_color="#ada_blue"
+			text_align="center"
+		/>
+	</styles>
+
+	<view extends="lv_label">
+		<style name="listening_style" />
+	</view>
+</component>

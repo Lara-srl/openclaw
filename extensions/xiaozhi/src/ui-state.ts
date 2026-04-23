@@ -30,3 +30,7 @@ export function buildUiState(
     brightness: opts.brightness ?? 255,
   });
 }
+
+export function buildEyeColor(hexColor: string): string {
+  return JSON.stringify({ type: "SET_EYE_COLOR", hex_color: hexColor });
+}

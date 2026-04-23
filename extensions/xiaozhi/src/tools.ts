@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { XiaozhiBridge } from "./bridge.js";
 import { getActiveBridge } from "./channel.js";
-import { AdaUiState, buildUiState } from "./ui-state.js";
+import { AdaUiState, buildEyeColor, buildUiState } from "./ui-state.js";
 
 const ok = (payload: unknown) => ({
   content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
@@ -117,6 +117,26 @@ export function registerLaragociTools(
         });
       }
       return ok({ ok: true, queued: true, url: params.url, repeat: count });
+    },
+  });
+
+  api.registerTool({
+    name: "laragoci_eye_color",
+    label: "Ada Eye Color",
+    description:
+      "Cambio il colore dei miei occhi sul display. DEVO usare questo tool quando l'utente chiede di cambiare colore degli occhi. Colori comuni: rosso=FF0000, verde=00FF00, blu=0000FF, giallo=FFFF00, viola=800080, arancione=FF8C00, bianco=FFFFFF, azzurro=00AAFF (default).",
+    parameters: Type.Object({
+      hex_color: Type.String({
+        description:
+          "Eye color as 6-char hex string. Common colors: FF0000=red, 00FF00=green, 0000FF=blue, FFFF00=yellow, 800080=purple, FF8C00=orange, FFFFFF=white, 00AAFF=default blue.",
+      }),
+    }),
+    async execute(_id, params) {
+      const bridge = getBridge();
+      if (!bridge) return notConnected();
+      console.log(`[laragoci_eye_color] setting color to #${params.hex_color}`);
+      bridge.sendToActiveSession(buildEyeColor(params.hex_color));
+      return ok({ ok: true, color: params.hex_color });
     },
   });
 

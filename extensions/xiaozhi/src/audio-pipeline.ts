@@ -829,6 +829,15 @@ export class AudioPipeline {
               if (payload.text) onToken(payload.text);
             }
           : undefined,
+        // Native tool ACTING: when server-side tools (web search, memory, etc.)
+        // start, push ACTING state to device so it doesn't stay on THINKING.
+        onAgentEvent: (evt) => {
+          if (evt.stream === "tool" && evt.data.phase === "start") {
+            const name = String(evt.data.name ?? "");
+            console.log(`[XZ UI] native tool start → ACTING: ${name}`);
+            this.sendJson(buildUiState(AdaUiState.ACTING, { text: "Eseguo..." }));
+          }
+        },
       });
 
       const texts = (result.payloads ?? [])

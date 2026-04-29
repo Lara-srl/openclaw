@@ -655,25 +655,82 @@ WiFi non configurato → "Ada" → "Configura WiFi\nHotspot: Xiaozhi-XXXX\nIP: .
 
 ---
 
-### Progresso stati UI Ada — riepilogo
+### Step 4D — Stati attivi UI con `screen_state` (LVGL Pro XML)
 
-| Codice | Stato           | Screen LVGL   | Status |
-| ------ | --------------- | ------------- | ------ |
-| 0      | BOOT            | `screen_boot` | ✅ 4C  |
-| 10     | WIFI_CONNECTING | `screen_boot` | ✅ 4C  |
-| 20     | WIFI_CONFIG     | `screen_boot` | ✅ 4C  |
-| 50     | ACTIVATING      | `screen_boot` | ✅ 4C  |
-| 100    | IDLE            | `screen_idle` | ✅ 4A  |
-| 200    | LISTENING       | TODO          | ❌     |
-| 300    | THINKING        | TODO          | ❌     |
-| 400    | ACTING          | TODO          | ❌     |
-| 500    | SPEAKING        | TODO          | ❌     |
-| 600    | COMPACTION      | TODO          | ❌     |
-| 900    | SHUTDOWN        | TODO          | ❌     |
+**Obiettivo**: feedback testuale per tutti gli stati attivi (LISTENING, THINKING, ACTING, SPEAKING, COMPACTION, SHUTDOWN). Un solo screen nuovo `screen_state` con occhi + blink + label di stato, anziché screen separati per ogni stato.
 
-**Prossimo**: Step 4D — stati LISTENING/THINKING/SPEAKING (rendering procedurale sullo `screen_idle` esistente o nuovi screen LVGL Pro).
+**Approccio**: componente `state_label` riusabile (extends `lv_label`, stile centrato, bg trasparente) + `screen_state` con occhi Ada identici a `screen_idle` + label sotto a y=310.
+
+**Scritte per stato**:
+
+| Codice | Stato      | Testo               |
+| ------ | ---------- | ------------------- |
+| 200    | LISTENING  | Ti Ascolto          |
+| 300    | THINKING   | Fammi Ragionare     |
+| 400    | ACTING     | Cassetta attrezzi   |
+| 500    | SPEAKING   | Ascoltami           |
+| 600    | COMPACTION | Organizzo i ricordi |
+| 900    | SHUTDOWN   | Spegnimento         |
+
+Il firmware aggiunge dots animati via timer (`"Ti Ascolto"` → `"Ti Ascolto ."` → `"Ti Ascolto .."` → `"Ti Ascolto ..."` → ciclo).
+
+**File creati**:
+
+| File                                                   | Descrizione                                                         |
+| ------------------------------------------------------ | ------------------------------------------------------------------- |
+| `Note/ada_ui/components/state_label/state_label.xml`   | Componente label riusabile (extends `lv_label`, bg_opa=0, centrato) |
+| `Note/ada_ui/components/state_label/state_label_gen.c` | Codice C generato da LVGL Pro                                       |
+| `Note/ada_ui/components/state_label/state_label_gen.h` | Header generato                                                     |
+| `Note/ada_ui/screens/screen_state/screen_state.xml`    | Screen con occhi + blink + state_label                              |
+| `Note/ada_ui/screens/screen_state/screen_state_gen.c`  | Codice C generato                                                   |
+| `Note/ada_ui/screens/screen_state/screen_state_gen.h`  | Header generato                                                     |
+
+**Integrazione firmware** (manuale):
+
+1. `screen_state_create()` → carica lo screen
+2. `lv_obj_get_child_by_name(screen, "status_text")` → trova la label
+3. `lv_label_set_text(label, "...")` → imposta testo per lo stato corrente
+4. Timer `esp_timer` ogni ~400ms per animazione dots
+5. Su ritorno a IDLE → `screen_idle_create()` + `lv_screen_load()`
+
+**File deprecati** (non cancellati): `screen_listening`, componenti `ear_*`, `listening_label` — sostituiti da `screen_state` + `state_label`.
+
+**✅ COMPLETATO — 2026-04-23** — XML + codice generato per tutti e 6 gli stati attivi.
 
 ---
+
+### Progresso stati UI Ada — riepilogo
+
+| Codice | Stato           | Screen LVGL    | Status |
+| ------ | --------------- | -------------- | ------ |
+| 0      | BOOT            | `screen_boot`  | ✅ 4C  |
+| 10     | WIFI_CONNECTING | `screen_boot`  | ✅ 4C  |
+| 20     | WIFI_CONFIG     | `screen_boot`  | ✅ 4C  |
+| 50     | ACTIVATING      | `screen_boot`  | ✅ 4C  |
+| 100    | IDLE            | `screen_idle`  | ✅ 4A  |
+| 200    | LISTENING       | `screen_state` | ✅ 4D  |
+| 300    | THINKING        | `screen_state` | ✅ 4D  |
+| 400    | ACTING          | `screen_state` | ✅ 4D  |
+| 500    | SPEAKING        | `screen_state` | ✅ 4D  |
+| 600    | COMPACTION      | `screen_state` | ✅ 4D  |
+| 900    | SHUTDOWN        | `screen_state` | ✅ 4D  |
+
+**✅ Tutti gli stati UI completati.** Step 5 (Asset Creation) è il prossimo step opzionale per sostituire il rendering procedurale con PNG reali.
+
+┌────────────┬───────────┐  
+ │ Stato │ Label │  
+ ├────────────┼───────────┤
+│ LISTENING │ Ascolto │
+├────────────┼───────────┤
+│ THINKING │ Ragiono │
+├────────────┼───────────┤
+│ ACTING │ Eseguo │
+├────────────┼───────────┤
+│ SPEAKING │ Parlo │
+├────────────┼───────────┤
+│ COMPACTION │ Memorizzo │
+├────────────┼───────────┤
+│ SHUTDOWN │ Dormo │
 
 ## Step 5 — 2.1C: Asset Creation & Deploy
 
@@ -719,130 +776,3 @@ WiFi non configurato → "Ada" → "Configura WiFi\nHotspot: Xiaozhi-XXXX\nIP: .
 **Complessità: M** (lavoro creativo + integrazione S)
 
 ---
-
-## Step 6 — 2.2C: Power Management Fix
-
-**Obiettivo**: spegnimento/deep sleep affidabile per i tester. Senza un reset/power-off affidabile, il supporto tecnico ai tester diventerà un incubo.
-
-### Problema attuale
-
-- Long-press quando in carica → nessun feedback (solo log "charging")
-- `PowerSaveTimer::OnShutdownRequest` in carica → solo spegne backlight, non entra in deep sleep
-
-### Fix
-
-1. **Long-press handler**: mostrare `AdaUiManager::SetState(kAdaUiShutdown)` + dopo 1.5s `esp_deep_sleep_start()`
-2. **Deep sleep wakeup**: `BSP_KNOB_BTN` è su IO expander TCA9555 (non GPIO diretto) → usare pin INT dell'expander come wakeup source:
-   ```cpp
-   esp_sleep_enable_ext0_wakeup(GPIO_NUM_2, 0); // IO_EXPANDER_INT, active-low
-   ```
-   GPIO_NUM_2 è RTC-capable su ESP32-S3 → funziona con deep sleep.
-3. **PowerSaveTimer shutdown**: aggiungere `esp_deep_sleep_start()` anche quando in carica
-
-### File da modificare
-
-- `Note/main/boards/sensecap-watcher/sensecap_watcher.cc` — handler `BUTTON_LONG_PRESS_START` + costruttore (wakeup config)
-
-### Verifica
-
-- Long-press 2s → animazione shutdown → device si spegne
-- Premere bottone → device si riaccende
-- Testare sia in carica che a batteria
-
-**Complessità: S** (richiede test hardware)
-
----
-
-## Step 7 — 2.3: Bluetooth A2DP Sink
-
-**Obiettivo**: streaming audio TTS verso cuffie BT. Quando BT è connesso, sostituisce lo speaker interno.
-
-### Architettura
-
-- **A2DP Sink**: device riceve comandi di pairing, diventa ricevitore audio
-- **Routing**: quando BT paired → audio va a BT; quando non paired → speaker interno
-- **Ring buffer**: 200ms a 44100Hz stereo int16 = ~35KB (allocare in PSRAM)
-
-### Task Management FreeRTOS
-
-- `Task_Audio_BT`: priorità 22 (massima), gestisce il buffer audio verso le cuffie
-- `Task_Comm_WiFi`: priorità standard, gestisce lo scambio dati con il cloud
-
-### Coesistenza WiFi+BT
-
-- ESP32-S3: antenna condivisa, time-division automatico via `esp_wifi_bt_coex_config`
-- WiFi: `WIFI_PS_MIN_MODEM` (non `WIFI_PS_NONE`) per coesistenza
-- Buffer 200ms copre gap DTIM (~100ms) con margine 2x
-
-### Conversione audio
-
-- Pipeline attuale: Opus 24kHz mono → PCM int16
-- A2DP richiede: 44100Hz stereo int16
-- `BtAudioSink::WritePcm()` fa resample + stereo duplicate
-
-### File da creare
-
-- `Note/main/audio/bt_audio_sink.h` + `bt_audio_sink.cc`
-
-### Config
-
-- `sdkconfig`: `CONFIG_BT_ENABLED=y`, `CONFIG_BT_CLASSIC_ENABLED=y`, `CONFIG_BT_A2DP_ENABLE=y`
-- Gated dietro `CONFIG_ADA_BT_A2DP` Kconfig option (compilabile out)
-
-### File da modificare
-
-- `Note/main/boards/sensecap-watcher/sensecap_watcher.cc` — init BT nel costruttore
-- `Note/main/CMakeLists.txt` — aggiungere bt_audio_sink.cc + componenti IDF `bt`, `bluedroid`
-- `Note/main/Kconfig.projbuild` — opzione `CONFIG_ADA_BT_A2DP`
-
-### Verifica
-
-- Pairing cuffie BT con device
-- Conversazione vocale → audio esce dalle cuffie
-- WiFi stabile durante streaming BT (no disconnessioni WS)
-
-**Complessità: XL** (massimo rischio, richiede test hardware estensivo)
-
----
-
-## Rischi e mitigazioni
-
-| Rischio                                  | Impatto           | Mitigazione                                 |
-| ---------------------------------------- | ----------------- | ------------------------------------------- |
-| LVGL thread safety (SetState da task WS) | Crash             | Usare `lv_async_call()` esclusivamente      |
-| Display 412x412 vs 320x320 nel doc       | Layout sbagliato  | Corretto in questo piano                    |
-| BT+WiFi glitch audio                     | Scatti audio      | Buffer 400ms se 200ms insufficiente         |
-| Camera JPEG troppo grande per MCP reply  | Send fallisce     | Verificare WS buffer ≥128KB                 |
-| Deep sleep wakeup via IO expander        | Non si riaccende  | Usare INT pin (GPIO_NUM_2) come ext0 wakeup |
-| `PlaySound()` haptic asincrono           | Suoni sovrapposti | Flag `haptic_busy` in fase 3 se necessario  |
-| Camera timeout MCP                       | Tool fallisce     | Timeout 10s per `laragoci_photo`            |
-
----
-
-## File di riferimento (repo-relative)
-
-### Esistenti (da modificare)
-
-- `extensions/xiaozhi/src/protocol.ts`
-- `extensions/xiaozhi/src/audio-pipeline.ts`
-- `extensions/xiaozhi/src/bridge.ts`
-- `extensions/xiaozhi/src/tools.ts`
-- `extensions/xiaozhi/src/types.ts`
-- `extensions/xiaozhi/src/context-manager.ts`
-
-### Firmware reference (in Note/main/)
-
-- `Note/main/protocols/websocket_protocol.cc`
-- `Note/main/boards/sensecap-watcher/sensecap_watcher.cc`
-- `Note/main/mcp_server.h/.cc`
-- `Note/main/led/single_led.h`
-- `Note/main/display/lcd_display.cc`
-- `Note/main/device_state_machine.h/.cc`
-
-### Da creare
-
-- `extensions/xiaozhi/src/ui-state.ts`
-- `extensions/xiaozhi/src/ui-state.test.ts`
-- `Note/main/display/ada_ui_manager.h/.cc` (firmware ref)
-- `Note/main/display/assets/` (C-array images)
-- `Note/main/audio/bt_audio_sink.h/.cc` (firmware ref)

@@ -1,0 +1,19 @@
+<component>
+	<api />
+
+	<styles>
+		<style
+			name="pill"
+			width="#ada_ew"
+			height="#ada_eh"
+			radius="#ada_er"
+			bg_color="#ada_blue"
+			bg_opa="255"
+			border_width="0"
+		/>
+	</styles>
+
+	<view extends="lv_obj">
+		<style name="pill" />
+	</view>
+</component>

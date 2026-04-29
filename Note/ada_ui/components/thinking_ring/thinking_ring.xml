@@ -1,0 +1,9 @@
+<component>
+	<api />
+	<styles>
+		<style name="ring_s" bg_opa="0" border_width="0" pad_top="0" pad_bottom="0" pad_left="0" pad_right="0" />
+	</styles>
+	<view extends="lv_arc">
+		<style name="ring_s" />
+	</view>
+</component>

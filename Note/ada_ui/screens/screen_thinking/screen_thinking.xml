@@ -1,0 +1,9 @@
+<component>
+	<api />
+	<styles>
+		<style name="ring_s" radius="9999" bg_opa="0" border_width="10" border_color="#ada_blue" border_opa="255" />
+	</styles>
+	<view extends="lv_obj">
+		<style name="ring_s" />
+	</view>
+</component>

@@ -122,10 +122,10 @@ case BUTTON_LONG_PRESS_HOLD: {
 
 ## Verifica
 
-- [ ] Long-press qualsiasi durata → **nessun factory reset**
-- [ ] NVS (WiFi SSID, config) intatte dopo long-press
-- [ ] Console `factory_reset` ancora funzionante (porta seriale)
-- [ ] Click singolo (talk toggle) invariato
+- [V] Long-press qualsiasi durata → **nessun factory reset**
+- [V] NVS (WiFi SSID, config) intatte dopo long-press
+- [N/A] Console `factory_reset` ancora funzionante (porta seriale) — _non verificabile: con device collegato via seriale il bottone power-off non funziona (il seriale mantiene il device attivo)_
+- [V] Click singolo (talk toggle) invariato
 
 ## Complessita: XS
 

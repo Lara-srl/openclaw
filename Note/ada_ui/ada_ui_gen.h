@@ -2,10 +2,6 @@
  * @file ada_ui_gen.h
  */
 
-#ifndef LV_USE_OBJ_NAME
-#define LV_USE_OBJ_NAME 1
-#endif
-
 #ifndef ADA_UI_GEN_H
 #define ADA_UI_GEN_H
 
@@ -37,7 +33,7 @@ extern "C" {
 
 #define BG_DARK lv_color_hex(0x000000)
 
-#define ADA_BLUE lv_color_hex(0x00AAFF)
+#define ADA_BLUE lv_color_hex(0xda103e)
 
 #define ADA_EW 70
 
@@ -46,6 +42,10 @@ extern "C" {
 #define ADA_ER 35
 
 #define ADA_GAP 60
+
+#define ADA_CYAN lv_color_hex(0x00BCD4)
+
+#define ADA_LIGHT_BLUE lv_color_hex(0x4FC3F7)
 
 /**********************
  *      TYPEDEFS
@@ -98,22 +98,21 @@ void ada_ui_init_gen(const char * asset_path);
  **********************/
 
 /*Include all the widgets, components and screens of this library*/
-#include "components/eye/eye_gen.h"
-#include "screens/screen_idle/screen_idle_gen.h"
-#include "components/eye/eye_gen.h"
-#include "components/boot_title/boot_title_gen.h"
 #include "components/boot_status/boot_status_gen.h"
-#include "screens/screen_idle/screen_idle_gen.h"
-#include "screens/screen_boot/screen_boot_gen.h"
+#include "components/boot_title/boot_title_gen.h"
 #include "components/ear_body/ear_body_gen.h"
 #include "components/ear_cut/ear_cut_gen.h"
-#include "components/ear_ridge/ear_ridge_gen.h"
 #include "components/ear_dot/ear_dot_gen.h"
-#include "components/boot_title/boot_title_gen.h"
-#include "components/boot_status/boot_status_gen.h"
+#include "components/ear_ridge/ear_ridge_gen.h"
+#include "components/eye/eye_gen.h"
 #include "components/listening_label/listening_label_gen.h"
+#include "components/state_label/state_label_gen.h"
+#include "components/thinking_ring/thinking_ring_gen.h"
 #include "screens/screen_boot/screen_boot_gen.h"
+#include "screens/screen_idle/screen_idle_gen.h"
 #include "screens/screen_listening/screen_listening_gen.h"
+#include "screens/screen_state/screen_state_gen.h"
+#include "screens/screen_thinking/screen_thinking_gen.h"
 
 #ifdef __cplusplus
 } /*extern "C"*/

@@ -1,0 +1,9 @@
+<component>
+	<api />
+	<styles>
+		<style name="state_style" width="412" bg_opa="0" border_width="0" text_color="#ada_blue" text_align="center" />
+	</styles>
+	<view extends="lv_label">
+		<style name="state_style" />
+	</view>
+</component>

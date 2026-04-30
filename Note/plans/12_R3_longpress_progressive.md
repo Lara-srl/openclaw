@@ -224,16 +224,30 @@ RELEASE → LONG_PRESS_UP:
 
 ## Verifica
 
-- [ ] Press < 5s → click singolo (talk toggle) invariato
-- [ ] Hold 5-6s poi rilascio → nessuna azione (zone=None → annulla)
-- [ ] Hold 7s → schermo mostra "Dormo..."
-- [ ] Rilascio tra 7-12s → entra in sleep
-- [ ] Hold 13s → schermo cambia in "Spegnimento..."
-- [ ] Rilascio >=13s → power off (deep sleep)
-- [ ] Hold 15s senza rilascio → auto power off
-- [ ] **Nessun factory reset** in nessun caso
-- [ ] In carica: power-off controllato (vedi R5 per dettagli)
+- [V] Press < 5s → click singolo (talk toggle) invariato
+- [V] Hold 5s → schermo mostra "Dormo..." (timing finale: 5s non 7s)
+- [V] Rilascio tra 5-10s → entra in sleep (display off, WiFi attivo)
+- [V] Hold 10s → schermo cambia in "Spegnimento..." (timing finale: 10s non 13s)
+- [V] Rilascio >=10s → power off
+- [V] Hold 11s senza rilascio → auto power off (timing finale: 11s non 15s)
+- [V] **Nessun factory reset** in nessun caso
+- [V] In carica (USB): backlight off invece di system off
+
+## Timing finale (diverso dal piano iniziale)
+
+| cnt   | Tempo totale | Evento                          |
+| ----- | ------------ | ------------------------------- |
+| START | 5s           | "Dormo...", zone=Sleep          |
+| 250   | 10s          | "Spegnimento...", zone=Shutdown |
+| 300   | 11s          | auto power off                  |
+
+## Note implementative
+
+- Wake da sleep: `BUTTON_SINGLE_CLICK` chiama `SetPowerSaveMode(false)` + `RestoreBrightness()` + `SetState(kAdaUiIdle)` prima di StartListening → wake immediato + ascolto contestuale (comportamento desiderato)
+- Charging guard: `IoExpanderGetLevel(BSP_PWR_VBUS_IN_DET) == 0` → backlight off invece di system off quando USB collegato
 
 ## Complessita: M
 
 Riscrittura completa di 3 handler + aggiunta 1 nuovo. Logica a stati con timing preciso. Richiede test hardware.
+
+## Stato: FATTO

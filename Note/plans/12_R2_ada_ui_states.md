@@ -157,12 +157,14 @@ Nessun nuovo file XML/componente necessario (riuso boot*screen*).
 
 ## Verifica
 
-- [ ] `SetState(kAdaUiSleeping)` → schermo mostra "aDa" + "Dormo..."
-- [ ] `SetState(kAdaUiShutdown)` → schermo mostra "aDa" + "Spegnimento..."
-- [ ] Da sleep → `SetState(kAdaUiIdle)` → torna a occhi con blink
-- [ ] Blink timer si ferma in sleep/shutdown
-- [ ] Blink timer riparte al ritorno in idle
+- [V] `SetState(kAdaUiSleeping)` → schermo mostra "aDa" + "Dormo..."
+- [V] `SetState(kAdaUiShutdown)` → schermo mostra "aDa" + "Spegnimento..."
+- [V] Da sleep → `SetState(kAdaUiIdle)` → torna a occhi con blink
+- [V] Blink timer si ferma in sleep/shutdown
+- [V] Blink timer riparte al ritorno in idle
 
 ## Complessita: XS
 
 Aggiungere 1 valore enum + 2 case nello switch. Nessun nuovo schermo/componente.
+
+## Stato: FATTO

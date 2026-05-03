@@ -229,17 +229,20 @@ RELEASE → LONG_PRESS_UP:
 - [V] Rilascio tra 5-10s → entra in sleep (display off, WiFi attivo)
 - [V] Hold 10s → schermo cambia in "Spegnimento..." (timing finale: 10s non 13s)
 - [V] Rilascio >=10s → power off
-- [V] Hold 11s senza rilascio → auto power off (timing finale: 11s non 15s)
+- [V] Hold 11s senza rilascio → auto power off (rimosso — nessun auto-off)
 - [V] **Nessun factory reset** in nessun caso
-- [V] In carica (USB): backlight off invece di system off
+- [V] In carica (USB): EnterSleepMode invece di deep sleep
 
-## Timing finale (diverso dal piano iniziale)
+## Timing finale
 
-| cnt   | Tempo totale | Evento                          |
-| ----- | ------------ | ------------------------------- |
-| START | 5s           | "Dormo...", zone=Sleep          |
-| 250   | 10s          | "Spegnimento...", zone=Shutdown |
-| 300   | 11s          | auto power off                  |
+| Durata press       | Evento                                         |
+| ------------------ | ---------------------------------------------- |
+| 0–5s + rilascio    | annullato, nessuna azione                      |
+| 5s+                | preview "Dormo..." animato                     |
+| rilascio 5–10s     | EnterSleepMode                                 |
+| 10s+               | preview "Mi spengo..." animato                 |
+| rilascio 10s+      | EnterDeepSleep (o EnterSleepMode se in carica) |
+| tieni all'infinito | resta su "Mi spengo...", nessun auto-off       |
 
 ## Note implementative
 

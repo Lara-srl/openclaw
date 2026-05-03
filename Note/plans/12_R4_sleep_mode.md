@@ -163,7 +163,7 @@ power_save_timer_->OnExitSleepMode([this]() {
 
 Il check `CanEnterSleepMode()` blocca se WS e' aperto. Due opzioni:
 
-**Opzione A — Modificare `CanEnterSleepMode()`** (in `application.cc`):
+Modificare `CanEnterSleepMode()`\*\* (in `application.cc`):
 
 ```cpp
 bool Application::CanEnterSleepMode() {
@@ -180,11 +180,6 @@ bool Application::CanEnterSleepMode() {
 }
 ```
 
-**Opzione B — Timer separato nel board** (non toccare application.cc):
-Creare un timer dedicato in `sensecap_watcher.cc` che conta inattivita senza passare per `CanEnterSleepMode()`.
-
-**Raccomandazione: Opzione A** — piu pulita, il check era troppo restrittivo per il nostro caso d'uso.
-
 ## WebSocket keepalive
 
 **File**: `Note/xiaozhi-esp32/main/protocols/protocol.cc:81-90`
@@ -197,7 +192,7 @@ Il WS ha timeout di **120s** senza dati. Durante sleep il gateway OpenClaw puo m
 
 Lo sleep puo essere attivato da:
 
-1. **Bottone long-press 7-12s** → R3 chiama `EnterSleepMode()` direttamente
+1. **Bottone long-press 5-10s** → R3 chiama `EnterSleepMode()` direttamente
 2. **Timer inattivita 30s** → PowerSaveTimer chiama `OnEnterSleepMode()` → `EnterSleepMode()`
 3. **WS command** (futuro) → gateway puo mandare comando sleep
 

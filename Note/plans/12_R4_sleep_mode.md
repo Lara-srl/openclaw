@@ -231,6 +231,8 @@ Con batteria ~400mAh del Watcher: sleep = ~4-5 ore, deep sleep = settimane.
 - [x] Long-press 5s + rilascio → EnterSleepMode via bottone
 - [x] Charging: sleep mostra "Mi carico..." a luminosità 5%, display resta acceso
 - [x] Auto-sleep 30s attivo anche in carica (timer sempre abilitato)
+- [x] USB collegato durante sleep a batteria → passa a charging sleep (5%, "Mi carico...")
+- [x] USB rimosso durante charging sleep → wake a idle
 - [x] Long-press 10s in carica → charging sleep invece di deep sleep
 - [x] Fix doppio trigger: long_press_zone reset a None su auto-shutdown cnt==300
 - [x] Fix LONG*PRESS_UP kLongPressNone non tocca UI se is_sleeping*

@@ -102,7 +102,7 @@ Touch I2C bus non inizializzato nel firmware. Wake solo via bottone e WS message
 - PowerSaveTimer aggiornato: 30s auto-sleep, no auto-shutdown
 - **Complessita: M-L** — nuovo subsystem sleep, test WiFi/WS
 
-### Step 5 — Implementare power off (deep sleep) → [R5](./12_R5_power_off.md)
+### Step 5 — Implementare power off (deep sleep) → [R5](./12_R5_power_off.md) - Fatto
 
 - `EnterDeepSleep()`: spegni periferiche + `esp_sleep_enable_ext0_wakeup(GPIO_NUM_2, 0)` + `esp_deep_sleep_start()`
 - Wakeup via IO expander TCA9555 INT → bottone → GPIO2 (RTC-capable)

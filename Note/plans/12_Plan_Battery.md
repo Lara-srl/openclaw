@@ -93,7 +93,7 @@ Touch I2C bus non inizializzato nel firmware. Wake solo via bottone e WS message
 - Charging guard: USB collegato → backlight off invece di system off
 - **Complessita: M** — 4 handler, logica a stati, test hardware
 
-### Step 4 — Implementare sleep mode (WiFi attivo) → [R4](./12_R4_sleep_mode.md)
+### Step 4 — Implementare sleep mode (WiFi attivo) → [R4](./12_R4_sleep_mode.md) - Fatto
 
 - **Display Sleep** (non ESP32 light sleep) — spegni display, WiFi resta attivo
 - `EnterSleepMode()` / `ExitSleepMode()` metodi unificati nel board

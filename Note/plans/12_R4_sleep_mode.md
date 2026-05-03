@@ -224,12 +224,12 @@ Con batteria ~400mAh del Watcher: sleep = ~4-5 ore, deep sleep = settimane.
 
 ## Verifica
 
-- [ ] Dopo 30s inattivita → display si spegne, "Dormo..." visibile 1s prima
-- [ ] WiFi resta connesso durante sleep (verificare con `ping` dal gateway)
-- [ ] WebSocket resta connesso (verificare con `ws ping` dal server)
-- [ ] Bottone press durante sleep → display si riaccende, torna idle
-- [ ] Audio non viene riprodotto durante sleep (a meno che non sia wake da WS — R8)
-- [ ] Charging: sleep funziona anche in carica
+- [x] Dopo 30s inattivita → display si spegne, "Dormo..." visibile ~800ms prima
+- [x] WiFi resta connesso durante sleep (WiFi PS:1, connessione mantenuta)
+- [x] WebSocket resta connesso
+- [x] Bottone press durante sleep → display si riaccende, torna idle (no flash "Dormo...")
+- [x] Long-press 5s + rilascio → EnterSleepMode via bottone
+- [x] Charging: sleep funziona anche con USB collegato
 
 ## Complessita: M-L
 

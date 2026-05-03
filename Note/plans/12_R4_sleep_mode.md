@@ -229,7 +229,7 @@ Con batteria ~400mAh del Watcher: sleep = ~4-5 ore, deep sleep = settimane.
 - [x] WebSocket resta connesso
 - [x] Bottone press durante sleep → display si riaccende, torna idle (no flash "Dormo...")
 - [x] Long-press 5s + rilascio → EnterSleepMode via bottone
-- [x] Charging: sleep funziona anche con USB collegato
+- [x] Charging: sleep mostra "Mi carico..." a luminosità 20%, display resta acceso
 
 ## Complessita: M-L
 

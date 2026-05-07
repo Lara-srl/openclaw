@@ -131,30 +131,28 @@ export class XiaozhiBridge {
     }
   }
 
+  /** Pending immediate flush scheduled via queueMicrotask (R8). */
+  private immediateFlushScheduled = false;
+
   /** Queue a hardware action for execution after the voice turn completes (post-IDLE).
-   *  R8: if pipeline is idle (no active voice turn), execute immediately. */
+   *  R8: if pipeline is idle (no active voice turn), batch and flush on next microtask. */
   queueDeferredHwAction(action: DeferredHwAction): void {
-    if (this.activePipeline?.isIdle) {
-      // No voice turn active — execute immediately (R8: wakes sleeping device)
-      console.log(`[XZ bridge] hw action immediate: ${action.key} (${action.mcpName})`);
-      void this.callDeviceMcp("tools/call", {
-        name: action.mcpName,
-        arguments: action.args,
-      })
-        .then(() => {
-          if (action.persist && action.durationMs >= 0) {
-            this.registerHwEffect(action.key, action.mcpName, action.args, action.durationMs);
-          }
-        })
-        .catch((err) => {
-          console.log(`[XZ bridge] hw action immediate failed: ${action.key}: ${err}`);
-        });
-      return;
-    }
     // Replace any existing action with the same key (e.g. multiple LED calls in one turn)
     this.deferredHwActions = this.deferredHwActions.filter((a) => a.key !== action.key);
     this.deferredHwActions.push(action);
-    console.log(`[XZ bridge] deferred hw action queued: ${action.key} (${action.mcpName})`);
+
+    if (this.activePipeline?.isIdle && !this.immediateFlushScheduled) {
+      // R8: pipeline idle — schedule flush on next microtask so multiple
+      // actions queued in the same tick get batched with proper delays.
+      this.immediateFlushScheduled = true;
+      queueMicrotask(() => {
+        this.immediateFlushScheduled = false;
+        console.log(`[XZ bridge] R8 immediate flush (pipeline idle)`);
+        void this.executeDeferredHwActions();
+      });
+    } else if (!this.activePipeline?.isIdle) {
+      console.log(`[XZ bridge] deferred hw action queued: ${action.key} (${action.mcpName})`);
+    }
   }
 
   /** Execute all deferred hardware actions (called after voice turn IDLE). */

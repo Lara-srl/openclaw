@@ -182,7 +182,7 @@ void EnterDeepSleep();
 - [x] Long-press >=10s + rilascio → EnterDeepSleep via bottone
 - [x] Premere bottone dopo power-off → device si riaccende (boot completo)
 - [x] WiFi disconnesso dopo deep sleep (full reboot confermato)
-- [ ] Power-off **a batteria** (senza USB) — testare senza cavo seriale
+- [x] Power-off **a batteria** (senza USB) — testare senza cavo seriale
 - [ ] Consumo in deep sleep < 100uA (verificare con multimetro)
 
 ## Complessita: S

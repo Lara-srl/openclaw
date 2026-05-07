@@ -15,26 +15,37 @@ La maggior parte di R6 era gia implementata in R4:
 - ✅ Knob rotate → `WakeUp()`
 - ✅ Audio input/output → `WakeUp()` (via Application)
 
-Unica aggiunta R6: **WakeUp su WS message**
-
-## Implementazione WS WakeUp
+### Infrastruttura aggiunta
 
 Aggiunto metodo virtuale `ResetInactivityTimer()` a `Board` base class,
 overridden in `SensecapWatcher` per chiamare `power_save_timer_->WakeUp()`.
-Chiamato in `websocket_protocol.cc` OnData callback.
 
-### File modificati
+| File                  | Modifica                                 |
+| --------------------- | ---------------------------------------- |
+| `board.h`             | `virtual void ResetInactivityTimer() {}` |
+| `sensecap_watcher.cc` | override → `power_save_timer_->WakeUp()` |
 
-| File                        | Modifica                                                 |
-| --------------------------- | -------------------------------------------------------- |
-| `board.h`                   | `virtual void ResetInactivityTimer() {}`                 |
-| `sensecap_watcher.cc`       | override → `power_save_timer_->WakeUp()`                 |
-| `websocket_protocol.cc:166` | `Board::GetInstance().ResetInactivityTimer()` nel OnData |
+### WS WakeUp — tentato e rimosso
+
+Inizialmente aggiunto `Board::GetInstance().ResetInactivityTimer()` nel
+callback OnData di `websocket_protocol.cc`. **Rimosso** perche il gateway
+invia keepalive ping ogni 8s (`bridge.ts:382-386`) che resettava ticks\_
+a 0 continuamente, impedendo al timer di raggiungere 30s.
+
+Il WakeUp su WS message non serve: gli eventi che contano (audio in/out,
+bottone, knob) gia chiamano WakeUp(). Il keepalive ping non e interazione
+utente e non deve resettare il timer.
+
+### Rimosso anche SetPowerSaveMode()
+
+Rimosse 3 chiamate a `GetDisplay()->SetPowerSaveMode()` in
+`sensecap_watcher.cc` — superflue (display off/dimmed direttamente)
+e rischiose (LVGL operations nel contesto del timer callback).
 
 ## Flusso completo
 
 ```
-Evento (bottone/audio/knob/WS message)
+Evento (bottone/audio/knob)
     → power_save_timer_->WakeUp()  [ticks_ = 0]
     │
     ... 30s senza eventi ...
@@ -44,9 +55,9 @@ Evento (bottone/audio/knob/WS message)
     → OnEnterSleepMode()
     → EnterSleepMode() [R4]
     │
-    ... sleep (display off, WiFi attivo) ...
+    ... sleep (display off o 5%, WiFi attivo) ...
     │
-Evento wake (bottone/WS)
+Evento wake (bottone/knob)
     → ExitSleepMode() [R4]
     → power_save_timer_->WakeUp()  [ticks_ = 0]
     → timer riparte da 0
@@ -57,7 +68,7 @@ Evento wake (bottone/WS)
 - [x] 30s senza toccare → device entra in sleep
 - [x] Click bottone durante countdown → reset timer
 - [x] Conversazione attiva → timer non scade mai
-- [x] WS message durante countdown → reset timer
 - [x] Dopo wake da sleep → timer riparte da 0
+- [x] Secondo ciclo sleep funziona (bug keepalive risolto)
 
 ## Complessita: S

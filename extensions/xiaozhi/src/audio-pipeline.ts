@@ -287,6 +287,10 @@ export class AudioPipeline {
       this._state = next;
     }
   }
+  /** Whether the pipeline is idle (no active voice turn). */
+  get isIdle(): boolean {
+    return this._state === "idle";
+  }
   private opusFrames: Buffer[] = [];
   /** Incremented on every abort/listen-start to invalidate in-flight process(). */
   private generation = 0;

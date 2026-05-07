@@ -277,7 +277,16 @@ export type AudioPipelineDeps = {
 // ─── AudioPipeline ────────────────────────────────────────────────────────────
 
 export class AudioPipeline {
-  private state: PipelineState = "idle";
+  private _state: PipelineState = "idle";
+  private get state(): PipelineState {
+    return this._state;
+  }
+  private set state(next: PipelineState) {
+    if (next !== this._state) {
+      console.log(`[XZ STATE] ${this._state} → ${next}`);
+      this._state = next;
+    }
+  }
   private opusFrames: Buffer[] = [];
   /** Incremented on every abort/listen-start to invalidate in-flight process(). */
   private generation = 0;

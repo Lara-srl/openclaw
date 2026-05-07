@@ -1,166 +1,109 @@
-# R8 — Wake da WS Message
+# R8 — Wake da WS Message ✅ COMPLETATO
 
 **Parent**: [12_Plan_Battery.md](./12_Plan_Battery.md)
-**Dipende da**: [R4](./12_R4_sleep_mode.md) (ExitSleepMode)
+**Dipende da**: [R4](./12_R4_sleep_mode.md) (ExitSleepMode), [R6](./12_R6_inactivity_timer.md) (ResetInactivityTimer)
 
-## Flusso attuale dei messaggi WS
+## Risultato
 
-```
-WS data ricevuto [network task]
-    ↓
-WebsocketProtocol::OnData()         websocket_protocol.cc:112-166
-    ├── binary → on_incoming_audio_()    (audio TTS)
-    └── text   → parse JSON → on_incoming_json_()
-                                    ↓
-Application::OnIncomingJson()       application.cc:521-607
-    ├── "tts"    → SetDeviceState(kDeviceStateSpeaking)
-    ├── "stt"    → display transcription
-    ├── "llm"    → display emotion
-    ├── "mcp"    → McpServer::ParseMessage()
-    ├── "system" → reboot, OTA, etc.
-    ├── "alert"  → display alert
-    └── "custom" → display custom payload
-```
-
-### Problema
-
-Quando il device e' in sleep (display off, R4), un messaggio WS arriva ma:
-
-- Il display e' spento → l'utente non vede nulla
-- L'audio e' potenzialmente disabilitato
-- Il `PowerSaveTimer` non viene svegliato
-
-## Strategia: wake selettivo per tipo messaggio
-
-Non tutti i messaggi devono svegliare il device:
-
-| Tipo                        | Wake?  | Motivo                                           |
-| --------------------------- | ------ | ------------------------------------------------ |
-| `tts` (state=start)         | **SI** | Richiede audio playback                          |
-| `mcp`                       | **SI** | Tool execution con side effects (es. LED, occhi) |
-| `system`                    | **SI** | Comandi critici (reboot, OTA)                    |
-| `alert`                     | **SI** | Notifica user-visible                            |
-| `tts` (state=stop/sentence) | no     | Metadata, non serve audio                        |
-| `stt`                       | no     | Solo display transcription                       |
-| `llm`                       | no     | Solo display emotion                             |
-| `custom`                    | no     | Display-only                                     |
+Il device si sveglia dal display sleep quando riceve messaggi WS actionable.
+Comandi MCP (LED, suoni, eye color) funzionano anche durante lo sleep.
 
 ## Implementazione
 
-### Approccio: Board::WakeUpFromSleep() + filtro in Application
+### Firmware — filtro wake in `application.cc`
 
-#### 1. Nuovo metodo virtuale in Board
-
-**File**: `Note/xiaozhi-esp32/main/boards/common/board.h`
+Aggiunto filtro inline all'inizio di `OnIncomingJson()` (riga ~532):
 
 ```cpp
-class Board {
-public:
-    // ... existing methods ...
-    virtual void WakeUpFromSleep() {} // default: no-op
-};
-```
-
-#### 2. Override nel SenseCAP Watcher
-
-**File**: `Note/main/boards/sensecap-watcher/sensecap_watcher.cc`
-
-```cpp
-void WakeUpFromSleep() override {
-    if (is_sleeping_) {
-        ExitSleepMode();  // R4 — display on, WiFi full, stato idle
+// Wake from sleep for actionable messages (R8)
+bool should_wake = false;
+if (strcmp(type->valuestring, "tts") == 0) {
+    auto state = cJSON_GetObjectItem(root, "state");
+    if (state && cJSON_IsString(state) && strcmp(state->valuestring, "start") == 0) {
+        should_wake = true;
     }
-    power_save_timer_->WakeUp();  // Reset timer inattivita
+} else if (strcmp(type->valuestring, "mcp") == 0 ||
+           strcmp(type->valuestring, "system") == 0 ||
+           strcmp(type->valuestring, "alert") == 0 ||
+           strcmp(type->valuestring, "SET_UI") == 0 ||
+           strcmp(type->valuestring, "SET_EYE_COLOR") == 0) {
+    should_wake = true;
+}
+if (should_wake) {
+    Board::GetInstance().ResetInactivityTimer();
 }
 ```
 
-#### 3. Chiamare da Application::OnIncomingJson()
+Riutilizza `ResetInactivityTimer()` (R6) che chiama `power_save_timer_->WakeUp()` →
+se in sleep, esegue `ExitSleepMode()` (display on, WiFi full) e resetta ticks a 0.
 
-**File**: `Note/xiaozhi-esp32/main/application.cc` riga ~521
+**Nota:** `SET_EYE_COLOR` e `SET_UI` aggiunti al filtro perche chiamano LVGL.
+Senza wake, LVGL `lv_obj_invalidate` su display spento causa watchdog timeout.
 
-Aggiungere filtro prima del dispatch esistente:
+### Gateway — MCP immediato quando pipeline idle
 
-```cpp
-protocol_->OnIncomingJson([this, display](const cJSON* root) {
-    auto type = cJSON_GetObjectItem(root, "type");
-    if (!type || !cJSON_IsString(type)) return;
+**File**: `extensions/xiaozhi/src/bridge.ts`
 
-    // Wake da sleep per messaggi che richiedono azione
-    if (ShouldWakeForMessage(root)) {
-        Board::GetInstance().WakeUpFromSleep();
-    }
+Problema: i tool MCP (`laragoci_led`, `laragoci_play`, ecc.) usavano
+`queueDeferredHwAction()` che eseguiva solo dopo un turno vocale (speaking → idle).
+Se il pipeline e idle (nessun turno), le azioni restavano in coda per sempre.
 
-    // ... dispatch esistente (tts, stt, mcp, etc.) ...
-});
-```
+Fix: `queueDeferredHwAction()` ora controlla `activePipeline.isIdle`:
 
-#### 4. Funzione filtro
+- **Pipeline idle** → microtask flush via `executeDeferredHwActions()` (con delay 400ms)
+- **Pipeline attivo** → deferred come prima (eseguito a fine turno)
 
-```cpp
-bool Application::ShouldWakeForMessage(const cJSON* root) {
-    auto type = cJSON_GetObjectItem(root, "type");
-    const char* t = type->valuestring;
-
-    if (strcmp(t, "mcp") == 0 || strcmp(t, "system") == 0 || strcmp(t, "alert") == 0) {
-        return true;
-    }
-
-    if (strcmp(t, "tts") == 0) {
-        auto state = cJSON_GetObjectItem(root, "state");
-        return state && cJSON_IsString(state) && strcmp(state->valuestring, "start") == 0;
-    }
-
-    return false;
+```typescript
+if (this.activePipeline?.isIdle && !this.immediateFlushScheduled) {
+  this.immediateFlushScheduled = true;
+  queueMicrotask(() => {
+    this.immediateFlushScheduled = false;
+    void this.executeDeferredHwActions();
+  });
 }
 ```
 
-## Thread safety
+Il microtask batching evita di mandare N richieste MCP nello stesso millisecondo
+(il device non gestisce piu di 1-2 MCP contemporanei → timeout 5000ms).
 
-- `WebsocketProtocol::OnData()` gira su network task
-- `on_incoming_json_()` viene schedulato nel main event loop via `Schedule()`
-- `Board::WakeUpFromSleep()` e' safe: `PowerSaveTimer::WakeUp()` resetta solo `ticks_` e `in_sleep_mode_` (atomici o sotto lock)
-- `ExitSleepMode()` (R4) cambia display e WiFi mode — safe dal main loop
+**File**: `extensions/xiaozhi/src/audio-pipeline.ts`
 
-## Flusso completo con wake
+- Aggiunto `get isIdle(): boolean` pubblico
 
-```
-Device in sleep (display off, WiFi attivo)
-    ↓
-Gateway manda messaggio WS (es. {"type":"tts","state":"start"})
-    ↓
-WebsocketProtocol::OnData() → parse JSON
-    ↓
-Application::OnIncomingJson()
-    ├── ShouldWakeForMessage() → true
-    ├── Board::WakeUpFromSleep()
-    │   ├── ExitSleepMode() [R4]: display ON, WiFi full, stato idle
-    │   └── power_save_timer_->WakeUp(): ticks=0
-    │
-    └── dispatch "tts" → SetDeviceState(kDeviceStateSpeaking)
-        → audio playback
-        → ... conversazione ...
-        → idle
-        → 30s → auto-sleep (R6)
-```
+### Tipi di messaggio WS
 
-## File coinvolti
+| Tipo                        | Wake?  | Motivo                             |
+| --------------------------- | ------ | ---------------------------------- |
+| `tts` (state=start)         | **SI** | Richiede audio playback            |
+| `mcp`                       | **SI** | Tool execution (LED, haptic, ecc.) |
+| `system`                    | **SI** | Comandi critici (reboot, OTA)      |
+| `alert`                     | **SI** | Notifica user-visible              |
+| `SET_UI`                    | **SI** | Cambia stato UI LVGL               |
+| `SET_EYE_COLOR`             | **SI** | Cambia colore occhi LVGL           |
+| `tts` (state=stop/sentence) | no     | Metadata                           |
+| `stt`                       | no     | Solo display transcription         |
+| `llm`                       | no     | Solo display emotion               |
+| `ping`                      | no     | Keepalive gateway                  |
 
-| File                  | Modifica                                                      |
-| --------------------- | ------------------------------------------------------------- |
-| `board.h`             | Aggiungere `virtual void WakeUpFromSleep() {}`                |
-| `sensecap_watcher.cc` | Override `WakeUpFromSleep()` → `ExitSleepMode()` + `WakeUp()` |
-| `sensecap_watcher.h`  | Dichiarazione override                                        |
-| `application.cc:521`  | Aggiungere filtro + `Board::WakeUpFromSleep()`                |
-| `application.h`       | Dichiarare `ShouldWakeForMessage()` (private)                 |
+## Limitazioni
+
+- **Solo display sleep** (R4): WiFi + WS attivi → MCP funziona ✅
+- **Deep sleep** (R5): WiFi + WS morti → nessun messaggio arriva ❌ (solo bottone fisico)
+- **Azioni deferred durante deep sleep**: se il device e disconnesso, le azioni
+  vanno in coda deferred. Al reconnect + primo turno vocale vengono eseguite.
+  Azioni con stessa key (es. LED) si sovrascrivono (ultimo vince).
 
 ## Verifica
 
-- [ ] Device in sleep → gateway manda TTS → device si sveglia, riproduce audio
-- [ ] Device in sleep → gateway manda MCP (es. SET_EYE_COLOR) → device esegue
-- [ ] Device in sleep → gateway manda "stt" → device **non** si sveglia
-- [ ] Dopo wake da WS → timer inattivita riparte (30s)
-- [ ] Se nessun altro evento per 30s → torna in sleep
+- [x] Device in display sleep → web UI manda LED → MCP immediato, LED si accende
+- [x] Device in display sleep → web UI manda play → suono eseguito
+- [x] Device in display sleep → web UI manda eye_color → colore cambia
+- [x] Pipeline idle → `R8 immediate flush` nei log
+- [x] Pipeline attivo → `deferred hw action queued` (eseguito a fine turno)
+- [x] Multi-play batching: delay 400ms tra azioni (no timeout)
+- [ ] Firmware R8 flashato → display si accende su MCP (da verificare)
 
-## Complessita: S-M
+## Complessita: M
 
-Nuovo metodo virtuale in Board + filtro in Application + override nel Watcher. Codice pulito, thread-safe.
+Firmware: filtro inline in OnIncomingJson (no nuovi metodi/classi).
+Gateway: `activePipeline` tracking + microtask flush in bridge.

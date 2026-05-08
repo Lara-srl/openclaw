@@ -16,7 +16,7 @@ LLM Agent  ──tool call──▶  tools.ts  ──callDeviceMcp()──▶  b
 
 **Flusso completo:**
 
-1. L'LLM decide di usare un tool (es. `laragoci_led`)
+1. L'LLM decide di usare un tool (es. `ada_led`)
 2. `tools.ts` → `getBridge()` → `bridge.callDeviceMcp("tools/call", { name, arguments })`
 3. `bridge.ts` → serializza JSON-RPC → invia frame `type:"mcp"` via WebSocket
 4. Device firmware esegue l'azione hardware
@@ -26,15 +26,15 @@ LLM Agent  ──tool call──▶  tools.ts  ──callDeviceMcp()──▶  b
 
 ## File coinvolti
 
-| File                                 | Ruolo                                                      |
-| ------------------------------------ | ---------------------------------------------------------- |
-| `extensions/xiaozhi/src/tools.ts`    | Definizione e registrazione tool                           |
-| `extensions/xiaozhi/src/bridge.ts`   | WS server + `callDeviceMcp()` + pending call tracking      |
-| `extensions/xiaozhi/src/protocol.ts` | `buildMcpRequest()` + `parseMessage()` (type:"mcp")        |
-| `extensions/xiaozhi/src/types.ts`    | `McpJsonRpcResponse`, `McpPendingCall`                     |
-| `extensions/xiaozhi/src/channel.ts`  | Singleton bridge via `Symbol.for()`                        |
-| `extensions/xiaozhi/src/ui-state.ts` | `buildUiState()` per feedback visivo device                |
-| `extensions/xiaozhi/index.ts`        | Lifecycle: `setActiveBridge()` + `registerLaragociTools()` |
+| File                                 | Ruolo                                                 |
+| ------------------------------------ | ----------------------------------------------------- |
+| `extensions/xiaozhi/src/tools.ts`    | Definizione e registrazione tool                      |
+| `extensions/xiaozhi/src/bridge.ts`   | WS server + `callDeviceMcp()` + pending call tracking |
+| `extensions/xiaozhi/src/protocol.ts` | `buildMcpRequest()` + `parseMessage()` (type:"mcp")   |
+| `extensions/xiaozhi/src/types.ts`    | `McpJsonRpcResponse`, `McpPendingCall`                |
+| `extensions/xiaozhi/src/channel.ts`  | Singleton bridge via `Symbol.for()`                   |
+| `extensions/xiaozhi/src/ui-state.ts` | `buildUiState()` per feedback visivo device           |
+| `extensions/xiaozhi/index.ts`        | Lifecycle: `setActiveBridge()` + `registerAdaTools()` |
 
 ## Come aggiungere un nuovo tool
 
@@ -54,8 +54,8 @@ Template copia-incolla per un tool MCP standard:
 
 ```typescript
 api.registerTool({
-  name: "laragoci_NOME", // prefisso "laragoci_" obbligatorio
-  label: "LaraGoci NOME",
+  name: "ada_NOME", // prefisso "ada_" obbligatorio
+  label: "Ada NOME",
   description: "Descrizione chiara per l'LLM — cosa fa e quando usarlo.",
   parameters: Type.Object({
     // Parametri con tipi Typebox — vincoli min/max dove serve
@@ -107,7 +107,7 @@ I seguenti pezzi sono già in place e **non** vanno toccati per aggiungere un nu
 - **`protocol.ts`** — `buildMcpRequest()` e parsing `type:"mcp"` sono generici
 - **`types.ts`** — `McpJsonRpcResponse` e `McpPendingCall` coprono qualsiasi tool
 - **`channel.ts`** — singleton bridge immutato
-- **`index.ts`** — `registerLaragociTools()` già chiamato al boot
+- **`index.ts`** — `registerAdaTools()` già chiamato al boot
 
 ## Gotcha critici
 
@@ -115,12 +115,12 @@ I seguenti pezzi sono già in place e **non** vanno toccati per aggiungere un nu
 
 ```typescript
 // ❌ SBAGLIATO — _getBridge è null nel contesto jiti separato
-export function registerLaragociTools(api, _getBridge) {
+export function registerAdaTools(api, _getBridge) {
   const getBridge = _getBridge; // null!
 }
 
 // ✅ CORRETTO — usa il singleton process-global
-export function registerLaragociTools(api, _getBridge) {
+export function registerAdaTools(api, _getBridge) {
   const getBridge = () => getActiveBridge(); // Symbol.for("openclaw.xiaozhi.bridge")
 }
 ```
@@ -233,32 +233,32 @@ AdaUiState.SHUTDOWN = 900; // Spegnimento
 
 ## Tool esistenti (riferimento)
 
-| Tool                     | MCP name firmware               | Parametri                        | Timeout  |
-| ------------------------ | ------------------------------- | -------------------------------- | -------- |
-| `laragoci_status`        | — (solo bridge check)           | nessuno                          | —        |
-| `laragoci_speak`         | — (gestito da audio pipeline)   | `text`                           | —        |
-| `laragoci_emoji`         | — (solo UI state)               | `emotion`                        | —        |
-| `laragoci_volume`        | `self.audio_speaker.set_volume` | `level: 0-100`                   | 5s       |
-| `laragoci_play`          | `self.audio_player.play`        | `url, repeat?`                   | deferred |
-| `laragoci_led`           | `self.led.set`                  | `hex_color, mode?, duration_ms?` | deferred |
-| `laragoci_haptic`        | `self.haptic.feedback`          | `pattern, repeat?`               | deferred |
-| `laragoci_sensor`        | `self.sensor.read`              | nessuno                          | 5s       |
-| `laragoci_factory_reset` | `self.system.factory_reset`     | `confirm: true`                  | 5s       |
-| `laragoci_sleep`         | `self.system.sleep`             | nessuno                          | 5s       |
-| `laragoci_photo`         | `self.camera.take_photo`        | `question?`                      | 10s      |
+| Tool                | MCP name firmware               | Parametri                        | Timeout  |
+| ------------------- | ------------------------------- | -------------------------------- | -------- |
+| `ada_status`        | — (solo bridge check)           | nessuno                          | —        |
+| `ada_speak`         | — (gestito da audio pipeline)   | `text`                           | —        |
+| `ada_emoji`         | — (solo UI state)               | `emotion`                        | —        |
+| `ada_volume`        | `self.audio_speaker.set_volume` | `level: 0-100`                   | 5s       |
+| `ada_play`          | `self.audio_player.play`        | `url, repeat?`                   | deferred |
+| `ada_led`           | `self.led.set`                  | `hex_color, mode?, duration_ms?` | deferred |
+| `ada_haptic`        | `self.haptic.feedback`          | `pattern, repeat?`               | deferred |
+| `ada_sensor`        | `self.sensor.read`              | nessuno                          | 5s       |
+| `ada_factory_reset` | `self.system.factory_reset`     | `confirm: true`                  | 5s       |
+| `ada_sleep`         | `self.system.sleep`             | nessuno                          | 5s       |
+| `ada_photo`         | `self.camera.take_photo`        | `question?`                      | 10s      |
 
-## Esempio completo: aggiungere `laragoci_display`
+## Esempio completo: aggiungere `ada_display`
 
 Supponiamo di voler controllare il display LCD del device con un tool MCP firmware `self.display.show_text`.
 
 ```typescript
-// In extensions/xiaozhi/src/tools.ts, dentro registerLaragociTools():
+// In extensions/xiaozhi/src/tools.ts, dentro registerAdaTools():
 
 api.registerTool({
-  name: "laragoci_display",
-  label: "LaraGoci Display",
+  name: "ada_display",
+  label: "Ada Display",
   description:
-    "Show custom text on the LaraGoci LCD display. Use for status messages, alerts, or information.",
+    "Show custom text on the Ada LCD display. Use for status messages, alerts, or information.",
   parameters: Type.Object({
     text: Type.String({ description: "Text to display (max 120 chars)." }),
     font_size: Type.Optional(
@@ -304,11 +304,11 @@ api.registerTool({
 Alcuni tool non chiamano il device — eseguono logica solo lato gateway:
 
 ```typescript
-// Esempio: laragoci_speak — TTS gestito dall'audio pipeline, non dal device MCP
+// Esempio: ada_speak — TTS gestito dall'audio pipeline, non dal device MCP
 api.registerTool({
-  name: "laragoci_speak",
-  label: "LaraGoci Speak",
-  description: "Speak text aloud on the LaraGoci device speaker via TTS.",
+  name: "ada_speak",
+  label: "Ada Speak",
+  description: "Speak text aloud on the Ada device speaker via TTS.",
   parameters: Type.Object({
     text: Type.String({ description: "Text to speak on the device." }),
   }),

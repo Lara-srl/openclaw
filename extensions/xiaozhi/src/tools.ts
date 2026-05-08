@@ -11,8 +11,8 @@ const ok = (payload: unknown) => ({
 
 const notConnected = () => ok({ ok: false, error: "No device connected" });
 
-/** Register all LaraGoci MCP tools on the plugin API. */
-export function registerLaragociTools(
+/** Register all Ada MCP tools on the plugin API. */
+export function registerAdaTools(
   api: OpenClawPluginApi,
   _getBridge: () => XiaozhiBridge | null,
 ): void {
@@ -21,7 +21,7 @@ export function registerLaragociTools(
   // by resolvePluginTools() in a separate plugin-registry cache context.
   const getBridge = (): XiaozhiBridge | null => getActiveBridge();
   api.registerTool({
-    name: "laragoci_status",
+    name: "ada_status",
     label: "Ada Status",
     description: "Controlla il mio stato di connessione e se sono online.",
     parameters: Type.Object({}),
@@ -33,7 +33,7 @@ export function registerLaragociTools(
   });
 
   api.registerTool({
-    name: "laragoci_speak",
+    name: "ada_speak",
     label: "Ada Speak",
     description: "Parlo ad alta voce tramite il mio altoparlante usando TTS.",
     parameters: Type.Object({
@@ -47,7 +47,7 @@ export function registerLaragociTools(
   });
 
   api.registerTool({
-    name: "laragoci_emoji",
+    name: "ada_emoji",
     label: "Ada Emoji",
     description: "Mostro un'emozione sul mio schermo LCD (la mia faccia).",
     parameters: Type.Object({
@@ -64,7 +64,7 @@ export function registerLaragociTools(
   });
 
   api.registerTool({
-    name: "laragoci_volume",
+    name: "ada_volume",
     label: "Ada Volume",
     description: "Regolo il volume del mio altoparlante (0-100).",
     parameters: Type.Object({
@@ -87,7 +87,7 @@ export function registerLaragociTools(
   });
 
   api.registerTool({
-    name: "laragoci_play",
+    name: "ada_play",
     label: "Ada Play",
     description:
       "Riproduco un suono dal mio altoparlante. Suoni disponibili: success, vibration, exclamation, popup, welcome. Usa repeat per ripetere.",
@@ -121,7 +121,7 @@ export function registerLaragociTools(
   });
 
   api.registerTool({
-    name: "laragoci_eye_color",
+    name: "ada_eye_color",
     label: "Ada Eye Color",
     description:
       "Cambio il colore dei miei occhi sul display. DEVO usare questo tool quando l'utente chiede di cambiare colore degli occhi. Colori comuni: rosso=FF0000, verde=00FF00, blu=0000FF, giallo=FFFF00, viola=800080, arancione=FF8C00, bianco=FFFFFF, azzurro=00AAFF (default).",
@@ -134,7 +134,7 @@ export function registerLaragociTools(
     async execute(_id, params) {
       const bridge = getBridge();
       if (!bridge) return notConnected();
-      console.log(`[laragoci_eye_color] setting color to #${params.hex_color}`);
+      console.log(`[ada_eye_color] setting color to #${params.hex_color}`);
       bridge.sendToActiveSession(buildEyeColor(params.hex_color));
       return ok({ ok: true, color: params.hex_color });
     },
@@ -143,7 +143,7 @@ export function registerLaragociTools(
   // --- Hardware MCP tools ---
 
   api.registerTool({
-    name: "laragoci_led",
+    name: "ada_led",
     label: "Ada LED",
     description:
       "Controllo il mio LED. Imposto colore (hex), modalità (static/pulse/blink) e durata.",
@@ -186,7 +186,7 @@ export function registerLaragociTools(
   });
 
   api.registerTool({
-    name: "laragoci_haptic",
+    name: "ada_haptic",
     label: "Ada Haptic",
     description:
       "Attivo il mio buzzer/vibrazione. Usa repeat per ripetere (es. 'vibra 5 volte' → repeat=5).",
@@ -220,7 +220,7 @@ export function registerLaragociTools(
   });
 
   api.registerTool({
-    name: "laragoci_sensor",
+    name: "ada_sensor",
     label: "Ada Sensor",
     description: "Leggo i miei sensori: livello batteria, stato ricarica, volume.",
     parameters: Type.Object({}),
@@ -240,7 +240,7 @@ export function registerLaragociTools(
   });
 
   api.registerTool({
-    name: "laragoci_factory_reset",
+    name: "ada_factory_reset",
     label: "Ada Factory Reset",
     description:
       "Resetto il dispositivo alle impostazioni di fabbrica: cancella WiFi, configurazioni e riavvia. ATTENZIONE: operazione irreversibile. Usare SOLO se l'utente lo chiede esplicitamente.",
@@ -266,7 +266,7 @@ export function registerLaragociTools(
   });
 
   api.registerTool({
-    name: "laragoci_sleep",
+    name: "ada_sleep",
     label: "Ada Sleep",
     description:
       "Metto il dispositivo in modalità sleep. Il display si spegne e consumo meno energia. L'utente può dire 'dormi' o 'vai a dormire'.",
@@ -287,7 +287,7 @@ export function registerLaragociTools(
   });
 
   api.registerTool({
-    name: "laragoci_photo",
+    name: "ada_photo",
     label: "Ada Photo",
     description:
       "Scatto una foto con la MIA fotocamera e descrivo quello che vedo IO. Opzionalmente ricevo una domanda sull'immagine.",
@@ -315,7 +315,7 @@ export function registerLaragociTools(
           30_000, // Camera capture + vision proxy analysis needs longer timeout
         )) as Record<string, unknown> | undefined;
 
-        console.log("[laragoci_photo] MCP result:", JSON.stringify(result));
+        console.log("[ada_photo] MCP result:", JSON.stringify(result));
 
         // Firmware returns {"success": true, "result": "description"} from vision proxy
         const description =

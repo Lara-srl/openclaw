@@ -3,7 +3,7 @@ import { XiaozhiBridge } from "./src/bridge.js";
 import { setActiveBridge, xiaozhiChannelPlugin } from "./src/channel.js";
 import { parseXiaozhuConfig, type XiaozhuConfig } from "./src/config.js";
 import { handleOtaRequest } from "./src/ota.js";
-import { registerLaragociTools } from "./src/tools.js";
+import { registerAdaTools } from "./src/tools.js";
 import type { XiaozhuRuntime } from "./src/types.js";
 import { createVisionHandler } from "./src/vision-proxy.js";
 
@@ -57,7 +57,7 @@ const xiaozhiPlugin = {
     });
 
     // MCP tools (stubs — Phase 2 wires real bridge calls)
-    registerLaragociTools(api, () => runtime?.bridge ?? null);
+    registerAdaTools(api, () => runtime?.bridge ?? null);
 
     // OTA endpoint — stub (501 Not Implemented)
     api.registerHttpRoute({

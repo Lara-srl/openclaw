@@ -244,6 +244,7 @@ AdaUiState.SHUTDOWN = 900; // Spegnimento
 | `laragoci_haptic`        | `self.haptic.feedback`          | `pattern, repeat?`               | deferred |
 | `laragoci_sensor`        | `self.sensor.read`              | nessuno                          | 5s       |
 | `laragoci_factory_reset` | `self.system.factory_reset`     | `confirm: true`                  | 5s       |
+| `laragoci_sleep`         | `self.system.sleep`             | nessuno                          | 5s       |
 | `laragoci_photo`         | `self.camera.take_photo`        | `question?`                      | 10s      |
 
 ## Esempio completo: aggiungere `laragoci_display`

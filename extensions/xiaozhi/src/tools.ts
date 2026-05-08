@@ -266,6 +266,27 @@ export function registerLaragociTools(
   });
 
   api.registerTool({
+    name: "laragoci_sleep",
+    label: "Ada Sleep",
+    description:
+      "Metto il dispositivo in modalità sleep. Il display si spegne e consumo meno energia. L'utente può dire 'dormi' o 'vai a dormire'.",
+    parameters: Type.Object({}),
+    async execute(_id, _params) {
+      const bridge = getBridge();
+      if (!bridge) return notConnected();
+      try {
+        const result = await bridge.callDeviceMcp("tools/call", {
+          name: "self.system.sleep",
+          arguments: {},
+        });
+        return ok({ ok: true, result });
+      } catch (err) {
+        return ok({ ok: false, error: String(err) });
+      }
+    },
+  });
+
+  api.registerTool({
     name: "laragoci_photo",
     label: "Ada Photo",
     description:

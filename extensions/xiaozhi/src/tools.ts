@@ -240,6 +240,32 @@ export function registerLaragociTools(
   });
 
   api.registerTool({
+    name: "laragoci_factory_reset",
+    label: "Ada Factory Reset",
+    description:
+      "Resetto il dispositivo alle impostazioni di fabbrica: cancella WiFi, configurazioni e riavvia. ATTENZIONE: operazione irreversibile. Usare SOLO se l'utente lo chiede esplicitamente.",
+    parameters: Type.Object({
+      confirm: Type.Boolean({
+        description: "Must be true to proceed. Always ask user for explicit confirmation first.",
+      }),
+    }),
+    async execute(_id, params) {
+      const bridge = getBridge();
+      if (!bridge) return notConnected();
+      if (!params.confirm) return ok({ ok: false, error: "confirm must be true" });
+      try {
+        const result = await bridge.callDeviceMcp("tools/call", {
+          name: "self.system.factory_reset",
+          arguments: { confirm: true },
+        });
+        return ok({ ok: true, result });
+      } catch (err) {
+        return ok({ ok: false, error: String(err) });
+      }
+    },
+  });
+
+  api.registerTool({
     name: "laragoci_photo",
     label: "Ada Photo",
     description:

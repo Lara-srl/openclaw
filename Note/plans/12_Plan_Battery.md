@@ -18,7 +18,7 @@
 
 ## Riepilogo requisiti
 
-### R1 — Disabilitare factory reset fisico
+### R1 — Disabilitare factory reset fisico - Fatto
 
 Il long-press attuale cancella le SSID salvate. **Deve essere rimosso completamente dal bottone.**
 Factory reset disponibile solo via HTTP request remoto (endpoint da esporre sul web server locale del device).
@@ -71,28 +71,29 @@ Touch I2C bus non inizializzato nel firmware. Wake solo via bottone e WS message
 
 ## Step di implementazione
 
-### Step 1 — Rimuovere factory reset dal bottone → [R1](./12_R1_factory_reset_disable.md)
+### Step 1 — Rimuovere factory reset dal bottone → [R1](./12_R1_factory_reset_disable.md) - Fatto
 
 - Eliminare la logica `cnt > 250` / cancellazione SSID dal handler `BUTTON_LONG_PRESS_HOLD`
 - 4 path analizzati: solo il button hold va rimosso, gli altri sono safe
 - **Complessita: XS** — rimuovere 4 righe
 
-### Step 2 — Aggiungere stati Ada UI (kAdaUiSleeping, kAdaUiShutdown) → [R2](./12_R2_ada_ui_states.md)
+### Step 2 — Aggiungere stati Ada UI (kAdaUiSleeping, kAdaUiShutdown) → [R2](./12_R2_ada_ui_states.md) - Fatto
 
 - `kAdaUiShutdown` gia presente (900), aggiungere solo `kAdaUiSleeping = 800`
 - Riuso `boot_screen_` (come WifiConnecting/Activating) — nessun nuovo schermo XML
 - 2 nuovi case in `SetState()`: "Dormo..." e "Spegnimento..."
 - **Complessita: XS** — 1 enum + 2 case
 
-### Step 3 — Long-press progressivo (sleep a 7s, power-off a 13s) → [R3](./12_R3_longpress_progressive.md)
+### Step 3 — Long-press progressivo → [R3](./12_R3_longpress_progressive.md) - Fatto
 
 - Riscrittura completa di 3 handler + nuovo `BUTTON_LONG_PRESS_UP`
-- Soglie: cnt=100 (7s) → sleep preview, cnt=400 (13s) → shutdown preview, cnt=500 (15s) → auto off
+- Timing finale: sleep a 5s, shutdown a 10s, auto off a 11s
 - `LongPressZone` enum per tracciare stato, rilascio esegue azione della zona corrente
-- Rimuovere LCD/system off immediato a 5s (era in LONG_PRESS_START)
+- Wake da sleep: click bottone → wake + ascolto immediato
+- Charging guard: USB collegato → backlight off invece di system off
 - **Complessita: M** — 4 handler, logica a stati, test hardware
 
-### Step 4 — Implementare sleep mode (WiFi attivo) → [R4](./12_R4_sleep_mode.md)
+### Step 4 — Implementare sleep mode (WiFi attivo) → [R4](./12_R4_sleep_mode.md) - Fatto
 
 - **Display Sleep** (non ESP32 light sleep) — spegni display, WiFi resta attivo
 - `EnterSleepMode()` / `ExitSleepMode()` metodi unificati nel board
@@ -101,7 +102,7 @@ Touch I2C bus non inizializzato nel firmware. Wake solo via bottone e WS message
 - PowerSaveTimer aggiornato: 30s auto-sleep, no auto-shutdown
 - **Complessita: M-L** — nuovo subsystem sleep, test WiFi/WS
 
-### Step 5 — Implementare power off (deep sleep) → [R5](./12_R5_power_off.md)
+### Step 5 — Implementare power off (deep sleep) → [R5](./12_R5_power_off.md) - Fatto
 
 - `EnterDeepSleep()`: spegni periferiche + `esp_sleep_enable_ext0_wakeup(GPIO_NUM_2, 0)` + `esp_deep_sleep_start()`
 - Wakeup via IO expander TCA9555 INT → bottone → GPIO2 (RTC-capable)

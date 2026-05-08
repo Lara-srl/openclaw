@@ -178,14 +178,12 @@ void EnterDeepSleep();
 
 ## Verifica
 
-- [ ] Long-press >=13s → schermo "Spegnimento..." per 1.5s → device si spegne
-- [ ] Long-press 15s senza rilascio → auto power-off
-- [ ] Premere bottone dopo power-off → device si riaccende (boot completo)
-- [ ] Power-off **a batteria** → funziona
-- [ ] Power-off **in carica** → funziona (o fallback a display sleep)
+- [x] Long-press 10s anteprima + 11s auto power-off → "Spegnimento..." 1.5s → deep sleep (rst:0x5 DSLEEP)
+- [x] Long-press >=10s + rilascio → EnterDeepSleep via bottone
+- [x] Premere bottone dopo power-off → device si riaccende (boot completo)
+- [x] WiFi disconnesso dopo deep sleep (full reboot confermato)
+- [x] Power-off **a batteria** (senza USB) — testare senza cavo seriale
 - [ ] Consumo in deep sleep < 100uA (verificare con multimetro)
-- [ ] WiFi disconnesso dopo deep sleep (confermato: e' un full reboot)
-- [ ] NVS **intatto** dopo deep sleep (no factory reset)
 
 ## Complessita: S
 

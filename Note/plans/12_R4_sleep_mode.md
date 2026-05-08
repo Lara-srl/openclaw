@@ -163,7 +163,7 @@ power_save_timer_->OnExitSleepMode([this]() {
 
 Il check `CanEnterSleepMode()` blocca se WS e' aperto. Due opzioni:
 
-**Opzione A — Modificare `CanEnterSleepMode()`** (in `application.cc`):
+Modificare `CanEnterSleepMode()`\*\* (in `application.cc`):
 
 ```cpp
 bool Application::CanEnterSleepMode() {
@@ -180,11 +180,6 @@ bool Application::CanEnterSleepMode() {
 }
 ```
 
-**Opzione B — Timer separato nel board** (non toccare application.cc):
-Creare un timer dedicato in `sensecap_watcher.cc` che conta inattivita senza passare per `CanEnterSleepMode()`.
-
-**Raccomandazione: Opzione A** — piu pulita, il check era troppo restrittivo per il nostro caso d'uso.
-
 ## WebSocket keepalive
 
 **File**: `Note/xiaozhi-esp32/main/protocols/protocol.cc:81-90`
@@ -197,7 +192,7 @@ Il WS ha timeout di **120s** senza dati. Durante sleep il gateway OpenClaw puo m
 
 Lo sleep puo essere attivato da:
 
-1. **Bottone long-press 7-12s** → R3 chiama `EnterSleepMode()` direttamente
+1. **Bottone long-press 5-10s** → R3 chiama `EnterSleepMode()` direttamente
 2. **Timer inattivita 30s** → PowerSaveTimer chiama `OnEnterSleepMode()` → `EnterSleepMode()`
 3. **WS command** (futuro) → gateway puo mandare comando sleep
 
@@ -229,12 +224,18 @@ Con batteria ~400mAh del Watcher: sleep = ~4-5 ore, deep sleep = settimane.
 
 ## Verifica
 
-- [ ] Dopo 30s inattivita → display si spegne, "Dormo..." visibile 1s prima
-- [ ] WiFi resta connesso durante sleep (verificare con `ping` dal gateway)
-- [ ] WebSocket resta connesso (verificare con `ws ping` dal server)
-- [ ] Bottone press durante sleep → display si riaccende, torna idle
-- [ ] Audio non viene riprodotto durante sleep (a meno che non sia wake da WS — R8)
-- [ ] Charging: sleep funziona anche in carica
+- [x] Dopo 30s inattivita → display si spegne, "Dormo..." visibile ~800ms prima
+- [x] WiFi resta connesso durante sleep (WiFi PS:1, connessione mantenuta)
+- [x] WebSocket resta connesso
+- [x] Bottone press durante sleep → display si riaccende, torna idle (no flash "Dormo...")
+- [x] Long-press 5s + rilascio → EnterSleepMode via bottone
+- [x] Charging: sleep mostra "Mi carico..." a luminosità 5%, display resta acceso
+- [x] Auto-sleep 30s attivo anche in carica (timer sempre abilitato)
+- [x] USB collegato durante sleep a batteria → passa a charging sleep (5%, "Mi carico...")
+- [x] USB rimosso durante charging sleep → wake a idle
+- [x] Long-press 10s in carica → charging sleep invece di deep sleep
+- [x] Fix doppio trigger: long_press_zone reset a None su auto-shutdown cnt==300
+- [x] Fix LONG*PRESS_UP kLongPressNone non tocca UI se is_sleeping*
 
 ## Complessita: M-L
 

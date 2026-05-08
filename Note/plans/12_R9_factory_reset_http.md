@@ -1,4 +1,4 @@
-# R9 — Factory Reset via HTTP
+# R9 — Factory Reset via HTTP + MCP Tool
 
 **Parent**: [12_Plan_Battery.md](./12_Plan_Battery.md)
 **Dipende da**: [R1](./12_R1_factory_reset_disable.md) (rimozione factory reset dal bottone)
@@ -6,7 +6,10 @@
 ## Obiettivo
 
 Factory reset rimosso dal bottone (R1). Serve un modo remoto per resettare il device.
-Esporre un endpoint HTTP sul web server locale del device.
+Due path:
+
+1. **HTTP endpoint** `POST /api/factory-reset` — da curl/script sulla stessa rete
+2. **MCP tool** `self.system.factory_reset` — invocabile dall'agente via chat/voce
 
 ## Framework disponibile
 

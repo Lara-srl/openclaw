@@ -233,17 +233,19 @@ AdaUiState.SHUTDOWN = 900; // Spegnimento
 
 ## Tool esistenti (riferimento)
 
-| Tool              | MCP name firmware               | Parametri                        | Timeout |
-| ----------------- | ------------------------------- | -------------------------------- | ------- |
-| `laragoci_status` | — (solo bridge check)           | nessuno                          | —       |
-| `laragoci_speak`  | — (gestito da audio pipeline)   | `text`                           | —       |
-| `laragoci_emoji`  | — (solo UI state)               | `emotion`                        | —       |
-| `laragoci_volume` | `self.audio_speaker.set_volume` | `level: 0-100`                   | 5s      |
-| `laragoci_play`   | — (stub, non implementato)      | `url`                            | —       |
-| `laragoci_led`    | `self.led.set`                  | `hex_color, mode?, duration_ms?` | 5s      |
-| `laragoci_haptic` | `self.haptic.feedback`          | `pattern: short/double/long`     | 5s      |
-| `laragoci_sensor` | `self.sensor.read`              | nessuno                          | 5s      |
-| `laragoci_photo`  | `self.camera.take_photo`        | `question?`                      | 10s     |
+| Tool                     | MCP name firmware               | Parametri                        | Timeout  |
+| ------------------------ | ------------------------------- | -------------------------------- | -------- |
+| `laragoci_status`        | — (solo bridge check)           | nessuno                          | —        |
+| `laragoci_speak`         | — (gestito da audio pipeline)   | `text`                           | —        |
+| `laragoci_emoji`         | — (solo UI state)               | `emotion`                        | —        |
+| `laragoci_volume`        | `self.audio_speaker.set_volume` | `level: 0-100`                   | 5s       |
+| `laragoci_play`          | `self.audio_player.play`        | `url, repeat?`                   | deferred |
+| `laragoci_led`           | `self.led.set`                  | `hex_color, mode?, duration_ms?` | deferred |
+| `laragoci_haptic`        | `self.haptic.feedback`          | `pattern, repeat?`               | deferred |
+| `laragoci_sensor`        | `self.sensor.read`              | nessuno                          | 5s       |
+| `laragoci_factory_reset` | `self.system.factory_reset`     | `confirm: true`                  | 5s       |
+| `laragoci_sleep`         | `self.system.sleep`             | nessuno                          | 5s       |
+| `laragoci_photo`         | `self.camera.take_photo`        | `question?`                      | 10s      |
 
 ## Esempio completo: aggiungere `laragoci_display`
 

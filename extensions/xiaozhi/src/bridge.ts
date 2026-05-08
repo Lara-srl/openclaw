@@ -35,6 +35,8 @@ export class XiaozhiBridge {
   private activeHwEffects = new Map<string, ActiveHwEffect>();
   /** Bug 3A deferred: hardware actions queued during LLM turn, executed post-IDLE. */
   private deferredHwActions: DeferredHwAction[] = [];
+  /** Active pipeline for the current device session (R8: used to check idle state). */
+  private activePipeline: AudioPipeline | null = null;
 
   constructor(private deps: BridgeDeps) {
     this.wss = new WebSocketServer({ noServer: true });
@@ -129,12 +131,28 @@ export class XiaozhiBridge {
     }
   }
 
-  /** Queue a hardware action for execution after the voice turn completes (post-IDLE). */
+  /** Pending immediate flush scheduled via queueMicrotask (R8). */
+  private immediateFlushScheduled = false;
+
+  /** Queue a hardware action for execution after the voice turn completes (post-IDLE).
+   *  R8: if pipeline is idle (no active voice turn), batch and flush on next microtask. */
   queueDeferredHwAction(action: DeferredHwAction): void {
     // Replace any existing action with the same key (e.g. multiple LED calls in one turn)
     this.deferredHwActions = this.deferredHwActions.filter((a) => a.key !== action.key);
     this.deferredHwActions.push(action);
-    console.log(`[XZ bridge] deferred hw action queued: ${action.key} (${action.mcpName})`);
+
+    if (this.activePipeline?.isIdle && !this.immediateFlushScheduled) {
+      // R8: pipeline idle — schedule flush on next microtask so multiple
+      // actions queued in the same tick get batched with proper delays.
+      this.immediateFlushScheduled = true;
+      queueMicrotask(() => {
+        this.immediateFlushScheduled = false;
+        console.log(`[XZ bridge] R8 immediate flush (pipeline idle)`);
+        void this.executeDeferredHwActions();
+      });
+    } else if (!this.activePipeline?.isIdle) {
+      console.log(`[XZ bridge] deferred hw action queued: ${action.key} (${action.mcpName})`);
+    }
   }
 
   /** Execute all deferred hardware actions (called after voice turn IDLE). */
@@ -328,6 +346,8 @@ export class XiaozhiBridge {
       }
     });
 
+    this.activePipeline = pipeline;
+
     // B9: send pending TTS from previous session (blocks listen:start via state guard)
     if (pending) {
       void pipeline.injectTts(pending);
@@ -390,6 +410,7 @@ export class XiaozhiBridge {
       // B8: implicit listen:stop on abnormal close (device disconnects instead
       // of sending listen:stop — listen:stop is lost in the TCP RST race).
       pipeline.flushOnDisconnect();
+      this.activePipeline = null;
       this.rejectAllPendingMcp("Device disconnected");
       this.sessions.delete(sessionId);
       console.log(

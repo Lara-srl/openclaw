@@ -254,14 +254,14 @@ export function registerLaragociTools(
       if (!bridge) return notConnected();
       if (!params.confirm) return ok({ ok: false, error: "confirm must be true" });
       try {
-        const result = await bridge.callDeviceMcp("tools/call", {
+        await bridge.callDeviceMcp("tools/call", {
           name: "self.system.factory_reset",
           arguments: { confirm: true },
         });
-        return ok({ ok: true, result });
-      } catch (err) {
-        return ok({ ok: false, error: String(err) });
+      } catch {
+        // Timeout atteso: il device reboota prima di rispondere
       }
+      return ok({ ok: true, message: "Factory reset inviato. Il dispositivo si sta riavviando." });
     },
   });
 

@@ -377,6 +377,7 @@ export {
   formatAllowlistMatchMeta,
   resolveAllowlistMatchSimple,
 } from "../channels/plugins/allowlist-match.js";
+export { runWithModelFallback } from "../agents/model-fallback.js";
 export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";
 export type { PollInput } from "../polls.js";
 

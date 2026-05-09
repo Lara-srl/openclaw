@@ -9,6 +9,7 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import { OpusEncoder } from "@discordjs/opus";
+import { runWithModelFallback } from "openclaw/plugin-sdk";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
 import type { WebSocket } from "ws";
 import { getActiveBridge } from "./channel.js";
@@ -818,40 +819,57 @@ export class AudioPipeline {
     const cfgModel = slashIdx > 0 ? rawModel.slice(slashIdx + 1) : rawModel || undefined;
 
     try {
-      const result = await deps.runEmbeddedPiAgent({
-        sessionId: entry.sessionId,
-        sessionKey,
-        messageProvider: "xiaozhi",
-        sessionFile,
-        workspaceDir,
-        config: cfg,
-        prompt: text,
-        provider: cfgProvider,
-        model: cfgModel,
-        thinkLevel,
-        verboseLevel: "off",
-        timeoutMs,
-        runId,
-        lane: "xiaozhi",
+      const fallbackResult = await runWithModelFallback({
+        cfg,
+        provider: cfgProvider ?? "",
+        model: cfgModel ?? "",
         agentDir,
-        disableTools: !needsTools,
-        extraSystemPrompt: buildExtraSystemPrompt(this.deps.config),
-        // P1C: fire-and-forget partial reply tokens into caller's buffer
-        onPartialReply: onToken
-          ? (payload) => {
-              if (payload.text) onToken(payload.text);
-            }
-          : undefined,
-        // Native tool ACTING: when server-side tools (web search, memory, etc.)
-        // start, push ACTING state to device so it doesn't stay on THINKING.
-        onAgentEvent: (evt) => {
-          if (evt.stream === "tool" && evt.data.phase === "start") {
-            const name = String(evt.data.name ?? "");
-            console.log(`[XZ UI] native tool start → ACTING: ${name}`);
-            this.sendJson(buildUiState(AdaUiState.ACTING, { text: "Eseguo..." }));
-          }
+        run: (provider, model) =>
+          deps.runEmbeddedPiAgent({
+            sessionId: entry.sessionId,
+            sessionKey,
+            messageProvider: "xiaozhi",
+            sessionFile,
+            workspaceDir,
+            config: cfg,
+            prompt: text,
+            provider,
+            model,
+            thinkLevel,
+            verboseLevel: "off",
+            timeoutMs,
+            runId,
+            lane: "xiaozhi",
+            agentDir,
+            disableTools: !needsTools,
+            extraSystemPrompt: buildExtraSystemPrompt(this.deps.config),
+            // P1C: fire-and-forget partial reply tokens into caller's buffer
+            onPartialReply: onToken
+              ? (payload) => {
+                  if (payload.text) onToken(payload.text);
+                }
+              : undefined,
+            // Native tool ACTING: when server-side tools (web search, memory, etc.)
+            // start, push ACTING state to device so it doesn't stay on THINKING.
+            onAgentEvent: (evt) => {
+              if (evt.stream === "tool" && evt.data.phase === "start") {
+                const name = String(evt.data.name ?? "");
+                console.log(`[XZ UI] native tool start → ACTING: ${name}`);
+                this.sendJson(buildUiState(AdaUiState.ACTING, { text: "Eseguo..." }));
+              }
+            },
+          }),
+        onError: ({ provider, model, error }) => {
+          const msg = error instanceof Error ? error.message : String(error);
+          console.log(`[XZ fallback] ${provider}/${model} failed: ${msg} — trying next`);
         },
       });
+      const result = fallbackResult.result;
+      if (fallbackResult.attempts.length > 0) {
+        console.log(
+          `[XZ fallback] succeeded with ${fallbackResult.provider}/${fallbackResult.model} after ${fallbackResult.attempts.length} failed attempt(s)`,
+        );
+      }
 
       const texts = (result.payloads ?? [])
         .filter((p) => p.text && !p.isError)

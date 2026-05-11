@@ -236,6 +236,24 @@ function sanitizeForTts(text: string): string {
 }
 
 /**
+ * Detect the NO_REPLY silent token or its sanitized fragments.
+ * sanitizeForTts strips underscores ("NO_REPLY" → "NOREPLY"), and streaming
+ * may truncate to "NO", "NORE", etc. — all of which must be suppressed to
+ * prevent the device from vocalising garbled acknowledgement tokens.
+ */
+function isSilentReplyForTts(text: string): boolean {
+  const t = text.trim().toUpperCase();
+  if (!t) return false;
+  // Full token (with or without underscore)
+  if (t === "NO_REPLY" || t === "NOREPLY") return true;
+  // Prefix fragment: sanitize removes _, so "NO_RE" → "NORE", etc.
+  // "NOREPLY".startsWith("NO") is true — intentional: a bare 2-char "NO" after
+  // a tool call is always a garbled NO_REPLY, not a real response.
+  const stripped = t.replace(/_/g, "");
+  return stripped.length >= 2 && "NOREPLY".startsWith(stripped);
+}
+
+/**
  * Detects tool intent from user text.
  * Returns true if the text likely needs tools, false for pure conversation.
  */
@@ -503,8 +521,9 @@ export class AudioPipeline {
         speakQueue.push(...sentences);
       }).then((response) => {
         // Flush remainder into queue before marking done — consumeLoop handles it.
+        // Filter NO_REPLY silent token so it never reaches TTS.
         const remainderText = sentBuf.trim();
-        if (remainderText) speakQueue.push(remainderText);
+        if (remainderText && !isSilentReplyForTts(remainderText)) speakQueue.push(remainderText);
         sentBuf = "";
         agentDone = true;
         return response;
@@ -618,6 +637,8 @@ export class AudioPipeline {
   ): Promise<{ frames: Buffer[] } | null> {
     const clean = sanitizeForTts(text);
     if (gen !== this.generation || !clean) return null;
+    // Safety net: suppress NO_REPLY fragments that leaked past the flush filter
+    if (isSilentReplyForTts(text) || isSilentReplyForTts(clean)) return null;
 
     console.log(`[XZ 2.5] TTS prefetch (${clean.length} chars): "${clean.slice(0, 60)}"`);
     let result: Awaited<ReturnType<typeof this.deps.runtime.tts.textToSpeechTelephony>>;

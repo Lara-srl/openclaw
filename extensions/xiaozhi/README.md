@@ -98,7 +98,7 @@ Automatic session management to prevent context overflow:
 | Device                      | Button Mode   | Features                                           |
 | --------------------------- | ------------- | -------------------------------------------------- |
 | **SenseCAP Watcher** (~$59) | Click-to-talk | Auto-sleep 30s, deep sleep, charging sleep, camera |
-| **ESP32-S3-BOX-3**          | Hold-to-talk  | Development board                                  |
+
 
 Firmware repository: [Lara-srl/xiaozhi-openclaw](https://github.com/Lara-srl/xiaozhi-openclaw)
 
